@@ -62,9 +62,30 @@ class PigptTheme {
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(
         backgroundColor: PigptColors.bgElevated,
         selectedItemColor: PigptColors.brand,
-        unselectedItemColor: PigptColors.inkFaint,
+        unselectedItemColor: PigptColors.inkMuted,
         type: BottomNavigationBarType.fixed,
         elevation: 0,
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: PigptColors.bgElevated,
+        indicatorColor: PigptColors.brandSoft,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return TextStyle(
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: selected ? PigptColors.brand : PigptColors.inkFaint,
+          );
+        }),
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return IconThemeData(
+            size: 24,
+            color: selected ? PigptColors.brand : PigptColors.inkMuted,
+          );
+        }),
       ),
       cardTheme: CardThemeData(
         color: PigptColors.bgElevated,

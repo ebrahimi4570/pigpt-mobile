@@ -8,9 +8,11 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
+import '../../core/brand.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
 
 final quickStartCardsProvider = FutureProvider<List<QuickStartCard>>((ref) async {
@@ -58,7 +60,7 @@ class QuickStartHubScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('شروع سریع')),
       body: cards.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => const ListShimmer(itemCount: 6),
         error: (e, _) => EmptyState(
           title: 'کارت‌ها در دسترس نیست',
           body: '$e',
@@ -68,7 +70,6 @@ class QuickStartHubScreen extends ConsumerWidget {
           ),
         ),
         data: (list) {
-          // Prefer 6 cards as product phase asks; show all if fewer/more.
           final shown = list.take(6).toList();
           return RefreshIndicator(
             onRefresh: () async {
@@ -83,57 +84,63 @@ class QuickStartHubScreen extends ConsumerWidget {
                   subtitle: 'شش مسیر سریع برای تولید متن یا تصویر',
                 ),
                 const SizedBox(height: 14),
-                ...shown.asMap().entries.map((e) {
-                  final c = e.value;
-                  return SoftCard(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    onTap: () => context.push('/quick-start/${c.id}'),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: PigptColors.brandSoft,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(
-                            c.kind == 'image'
-                                ? Icons.image_outlined
-                                : Icons.edit_note_rounded,
-                            color: PigptColors.brand,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(c.title,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w800)),
-                              if (c.description != null)
-                                Text(
-                                  c.description!,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: PigptColors.inkMuted,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_left_rounded),
-                      ],
-                    ),
+                if (shown.isEmpty)
+                  const EmptyState(
+                    title: 'کارتی نیست',
+                    body: 'کارت‌های شروع سریع از سرور نیامد.',
                   )
-                      .animate(delay: (40 * e.key).ms)
-                      .fadeIn(duration: 300.ms)
-                      .slideY(begin: 0.06, end: 0);
-                }),
+                else
+                  ...shown.asMap().entries.map((e) {
+                    final c = e.value;
+                    return SoftCard(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      onTap: () => context.push('/quick-start/${c.id}'),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: PigptColors.brandSoft,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(
+                              c.kind == 'image'
+                                  ? Icons.image_outlined
+                                  : Icons.edit_note_rounded,
+                              color: PigptColors.brand,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(c.title,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w800)),
+                                if (c.description != null)
+                                  Text(
+                                    c.description!,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: PigptColors.inkMuted,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.chevron_left_rounded),
+                        ],
+                      ),
+                    )
+                        .animate(delay: (40 * e.key).ms)
+                        .fadeIn(duration: 300.ms)
+                        .slideY(begin: 0.06, end: 0);
+                  }),
                 const SizedBox(height: 18),
                 const SectionHeader(title: 'تاریخچه'),
                 const SizedBox(height: 8),
@@ -153,7 +160,8 @@ class QuickStartHubScreen extends ConsumerWidget {
                         return ListTile(
                           contentPadding: EdgeInsets.zero,
                           title: Text('${m['title'] ?? m['card_id'] ?? 'اجرا'}'),
-                          subtitle: Text('${m['created_at'] ?? m['status'] ?? ''}'),
+                          subtitle:
+                              Text('${m['created_at'] ?? m['status'] ?? ''}'),
                         );
                       }).toList(),
                     );
@@ -184,8 +192,10 @@ class _QuickStartWizardScreenState
   String _quality = 'fast';
   bool _busy = false;
   String? _result;
+  String? _imageUrl;
   String? _error;
   String? _jobId;
+  List<Map<String, dynamic>> _followUps = const [];
   Timer? _poll;
 
   @override
@@ -217,24 +227,34 @@ class _QuickStartWizardScreenState
       for (final f in card.fields) {
         _values[f.id] = TextEditingController();
       }
+      final fus = data['follow_ups'];
       setState(() {
         _card = card;
         _quality = card.qualityOptions.isNotEmpty
             ? card.qualityOptions.first
             : 'fast';
+        if (fus is List) {
+          _followUps = fus
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+        }
       });
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     }
   }
 
-  Future<void> _run() async {
+  Future<void> _run({String? followUp}) async {
     final card = _card;
     if (card == null) return;
     setState(() {
       _busy = true;
       _error = null;
-      _result = null;
+      if (followUp == null) {
+        _result = null;
+        _imageUrl = null;
+      }
     });
     try {
       final fields = <String, dynamic>{};
@@ -248,17 +268,56 @@ class _QuickStartWizardScreenState
           'card_id': card.id,
           'fields': fields,
           'quality': _quality,
+          if (followUp != null) 'follow_up': followUp,
+          if (followUp != null && _result != null) 'previous_text': _result,
         },
         parser: (d) => Map<String, dynamic>.from(d as Map),
       );
-      final text = '${data['text'] ?? data['output'] ?? data['result'] ?? ''}';
-      final jobId = data['job_id']?.toString();
-      if (text.isNotEmpty) {
+      final fus = data['follow_ups'];
+      if (fus is List) {
+        _followUps = fus
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+      final kind = '${data['kind'] ?? card.kind}';
+      final text = '${data['copy_all'] ?? data['raw'] ?? data['text'] ?? data['output'] ?? data['result'] ?? ''}';
+      final sections = data['sections'];
+      if (sections is List && sections.isNotEmpty) {
+        final buf = StringBuffer();
+        for (final s in sections) {
+          if (s is Map) {
+            buf.writeln(s['title'] ?? '');
+            buf.writeln(s['body'] ?? s['text'] ?? '');
+            buf.writeln();
+          }
+        }
+        setState(() => _result = buf.toString().trim().isNotEmpty
+            ? buf.toString().trim()
+            : text);
+      } else if (text.isNotEmpty) {
         setState(() => _result = text);
-      } else if (jobId != null) {
+      }
+
+      final img = data['image_url'] ??
+          data['url'] ??
+          (data['job'] is Map ? (data['job'] as Map)['image_url'] : null) ??
+          (data['job'] is Map ? (data['job'] as Map)['url'] : null);
+      if (img != null && '$img'.isNotEmpty) {
+        setState(() => _imageUrl = '$img');
+      }
+
+      final jobId = data['job_id']?.toString() ??
+          (data['job'] is Map ? '${(data['job'] as Map)['id']}' : null);
+      if ((_result == null || _result!.isEmpty) &&
+          _imageUrl == null &&
+          jobId != null) {
         _jobId = jobId;
         _startPoll(jobId);
-      } else {
+      } else if (_result == null &&
+          _imageUrl == null &&
+          kind != 'image' &&
+          data.isNotEmpty) {
         setState(() => _result = data.toString());
       }
       ref.invalidate(quickStartHistoryProvider);
@@ -278,15 +337,37 @@ class _QuickStartWizardScreenState
           ApiPaths.quickStartJob(jobId),
           parser: (d) => Map<String, dynamic>.from(d as Map),
         );
-        final status = '${data['status'] ?? ''}';
-        final text = '${data['text'] ?? data['output'] ?? data['result'] ?? ''}';
-        if (status == 'completed' || text.isNotEmpty) {
+        final job = data['job'] is Map
+            ? Map<String, dynamic>.from(data['job'] as Map)
+            : data;
+        final status = '${job['status'] ?? data['status'] ?? ''}';
+        final text =
+            '${job['text'] ?? job['output'] ?? job['result'] ?? data['text'] ?? data['output'] ?? ''}';
+        final img = job['image_url'] ??
+            job['url'] ??
+            job['result_url'] ??
+            data['image_url'] ??
+            data['url'];
+        if (img != null && '$img'.isNotEmpty) {
           _poll?.cancel();
-          if (mounted) setState(() => _result = text.isNotEmpty ? text : 'انجام شد');
+          if (mounted) {
+            setState(() {
+              _imageUrl = '$img'.startsWith('http')
+                  ? '$img'
+                  : '${PigptBrand.apiBase}$img';
+              if (text.isNotEmpty) _result = text;
+            });
+          }
+        } else if (status == 'completed' || text.isNotEmpty) {
+          _poll?.cancel();
+          if (mounted) {
+            setState(() => _result = text.isNotEmpty ? text : 'انجام شد');
+          }
         } else if (status == 'failed') {
           _poll?.cancel();
           if (mounted) {
-            setState(() => _error = '${data['error_message_fa'] ?? 'ناموفق'}');
+            setState(() =>
+                _error = '${job['error_message_fa'] ?? data['error_message_fa'] ?? 'ناموفق'}');
           }
         }
       } catch (_) {}
@@ -301,7 +382,7 @@ class _QuickStartWizardScreenState
       body: card == null
           ? (_error != null
               ? EmptyState(title: 'خطا', body: _error)
-              : const Center(child: CircularProgressIndicator()))
+              : const ListShimmer(itemCount: 4))
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -338,7 +419,7 @@ class _QuickStartWizardScreenState
                 ),
                 const SizedBox(height: 18),
                 FilledButton(
-                  onPressed: _busy ? null : _run,
+                  onPressed: _busy ? null : () => _run(),
                   child: _busy
                       ? const SizedBox(
                           width: 22,
@@ -347,7 +428,7 @@ class _QuickStartWizardScreenState
                         )
                       : const Text('اجرا'),
                 ),
-                if (_jobId != null && _result == null) ...[
+                if (_jobId != null && _result == null && _imageUrl == null) ...[
                   const SizedBox(height: 12),
                   const LinearProgressIndicator(),
                   const SizedBox(height: 8),
@@ -355,7 +436,32 @@ class _QuickStartWizardScreenState
                 ],
                 if (_error != null) ...[
                   const SizedBox(height: 12),
-                  Text(_error!, style: const TextStyle(color: PigptColors.danger)),
+                  Text(_error!,
+                      style: const TextStyle(color: PigptColors.danger)),
+                ],
+                if (_imageUrl != null) ...[
+                  const SizedBox(height: 20),
+                  SoftCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text('تصویر',
+                            style: TextStyle(fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.network(
+                            _imageUrl!.startsWith('http')
+                                ? _imageUrl!
+                                : '${PigptBrand.apiBase}$_imageUrl',
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const Text(
+                                'پیش‌نمایش تصویر در دسترس نیست'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ).animate().fadeIn(),
                 ],
                 if (_result != null) ...[
                   const SizedBox(height: 20),
@@ -382,12 +488,33 @@ class _QuickStartWizardScreenState
                         ),
                         SelectableText(_result!),
                         const SizedBox(height: 8),
-                        const Text('آماده‌شده با PiGPT',
+                        const Text(PigptBrand.readyWith,
                             style: TextStyle(
                                 color: PigptColors.inkFaint, fontSize: 12)),
                       ],
                     ),
                   ).animate().fadeIn().slideY(begin: 0.05, end: 0),
+                ],
+                if (_followUps.isNotEmpty &&
+                    (_result != null || _imageUrl != null)) ...[
+                  const SizedBox(height: 16),
+                  const SectionHeader(title: 'ادامه‌ها'),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _followUps.map((fu) {
+                      final id = '${fu['id'] ?? fu['key'] ?? ''}';
+                      final label =
+                          '${fu['label_fa'] ?? fu['label'] ?? fu['title'] ?? id}';
+                      return ActionChip(
+                        label: Text(label),
+                        onPressed: _busy
+                            ? null
+                            : () => _run(followUp: id.isEmpty ? 'retry' : id),
+                      );
+                    }).toList(),
+                  ),
                 ],
               ],
             ),

@@ -141,15 +141,34 @@ class ApiClient {
     String fieldName = 'file',
     String? filename,
   }) async {
+    return postMultipart(
+      '/uploads',
+      filePath: filePath,
+      fieldName: fieldName,
+      filename: filename,
+    );
+  }
+
+  /// Multipart POST to an arbitrary API path (OCR, STT, CSV analyze, …).
+  Future<Map<String, dynamic>> postMultipart(
+    String path, {
+    required String filePath,
+    String fieldName = 'file',
+    String? filename,
+    Map<String, dynamic>? fields,
+  }) async {
     try {
-      final form = FormData.fromMap({
+      final map = <String, dynamic>{
         fieldName: await MultipartFile.fromFile(
           filePath,
           filename: filename,
         ),
-      });
+        if (fields != null)
+          ...fields.map((k, v) => MapEntry(k, v?.toString() ?? '')),
+      };
+      final form = FormData.fromMap(map);
       final res = await _dio.post<dynamic>(
-        '/uploads',
+        path,
         data: form,
         options: Options(
           contentType: 'multipart/form-data',

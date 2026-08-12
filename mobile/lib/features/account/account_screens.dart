@@ -11,7 +11,6 @@ import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/ui.dart';
-import '../chat/chat_providers.dart';
 
 class AccountHubScreen extends ConsumerWidget {
   const AccountHubScreen({super.key});
@@ -111,7 +110,8 @@ class AccountHubScreen extends ConsumerWidget {
 }
 
 class PlansScreen extends ConsumerStatefulWidget {
-  const PlansScreen({super.key});
+  const PlansScreen({super.key, this.billingStatus});
+  final String? billingStatus;
 
   @override
   ConsumerState<PlansScreen> createState() => _PlansScreenState();
@@ -119,51 +119,113 @@ class PlansScreen extends ConsumerStatefulWidget {
 
 class _PlansScreenState extends ConsumerState<PlansScreen> {
   List<BillingPlan> _plans = const [];
+  List<TokenPackage> _packages = const [];
+  BillingWallet? _wallet;
   String? _error;
   bool _loading = true;
   String? _gateway;
+  String? _busyId;
 
   @override
   void initState() {
     super.initState();
     _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final b = widget.billingStatus;
+      if (b == null || !mounted) return;
+      final msg = switch (b) {
+        'ok' => 'پرداخت موفق — موجودی به‌روز شد',
+        'failed' => 'پرداخت ناموفق بود',
+        'missing' => 'پرداخت یافت نشد',
+        _ => 'وضعیت پرداخت: $b',
+      };
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      if (b == 'ok') {
+        ref.read(authControllerProvider.notifier).refreshMe();
+      }
+    });
   }
 
   Future<void> _load() async {
+    final api = ref.read(apiClientProvider);
+    String? error;
+    List<BillingPlan> plans = const [];
+    List<TokenPackage> packages = const [];
+    BillingWallet? wallet;
+    String? gateway;
+
     try {
-      final api = ref.read(apiClientProvider);
       final data = await api.get<Map<String, dynamic>>(
         ApiPaths.billingPlans,
         parser: (d) => Map<String, dynamic>.from(d as Map),
       );
       final list = (data['plans'] ?? data['items'] ?? []) as List;
       final current = data['current_plan_id']?.toString();
-      setState(() {
-        _gateway = data['gateway']?.toString();
-        _plans = list
-            .whereType<Map>()
-            .map((e) {
-              final p = BillingPlan.fromJson(Map<String, dynamic>.from(e));
-              return BillingPlan(
-                id: p.id,
-                name: p.name,
-                price: p.price,
-                description: p.description,
-                current: p.id == current || p.current,
-              );
-            })
-            .toList();
-        _loading = false;
-      });
+      gateway = data['gateway']?.toString();
+      plans = list.whereType<Map>().map((e) {
+        final p = BillingPlan.fromJson(Map<String, dynamic>.from(e));
+        return BillingPlan(
+          id: p.id,
+          name: p.name,
+          price: p.price,
+          priceRial: p.priceRial,
+          description: p.description,
+          current: p.id == current || p.current,
+          tokensGranted: p.tokensGranted,
+          capabilityCount: p.capabilityCount,
+        );
+      }).toList();
     } on ApiException catch (e) {
-      setState(() {
-        _error = e.message;
-        _loading = false;
-      });
+      error = e.message;
     }
+
+    try {
+      final pkgs = await api.get<Map<String, dynamic>>(
+        ApiPaths.billingTokenPackages,
+        parser: (d) => Map<String, dynamic>.from(d as Map),
+      );
+      final list = (pkgs['packages'] ?? pkgs['items'] ?? []) as List;
+      packages = list
+          .whereType<Map>()
+          .map((e) => TokenPackage.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } on ApiException catch (e) {
+      error ??= e.message;
+    }
+
+    try {
+      final w = await api.get<Map<String, dynamic>>(
+        ApiPaths.billingWallet,
+        parser: (d) => Map<String, dynamic>.from(d as Map),
+      );
+      wallet = BillingWallet.fromJson(w);
+    } on ApiException {
+      // Fall back to /me wallet fields below.
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _gateway = gateway;
+      _plans = plans;
+      _packages = packages;
+      _wallet = wallet;
+      _error = error;
+      _loading = false;
+    });
   }
 
-  Future<void> _pay(String planId) async {
+  String _fmtPrice(num? rial) {
+    if (rial == null) return '—';
+    if (rial == 0) return 'رایگان';
+    final toman = (rial / 10).round();
+    return '${toman.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},')} تومان';
+  }
+
+  String _fmtNum(num n) =>
+      n.round().toString().replaceAllMapped(
+          RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
+
+  Future<void> _openPayment(Map<String, dynamic> body, String busyId) async {
     if (_gateway == 'inactive') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -171,441 +233,238 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
       );
       return;
     }
+    setState(() => _busyId = busyId);
     try {
       final api = ref.read(apiClientProvider);
       final data = await api.post<Map<String, dynamic>>(
         ApiPaths.billingPayments,
-        data: {'plan_id': planId},
+        data: body,
         parser: (d) => Map<String, dynamic>.from(d as Map),
       );
       final url = '${data['redirect_url'] ?? data['url'] ?? ''}';
       if (url.isNotEmpty) {
-        await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        final uri = Uri.parse(url);
+        final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+        if (!ok && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('باز کردن درگاه پرداخت ناموفق بود')),
+          );
+        }
       }
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(e.message)));
       }
+    } finally {
+      if (mounted) setState(() => _busyId = null);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final me = ref.watch(meProvider);
+    final wallet = _wallet;
+    final balance = wallet?.balance ?? me?.balance;
+    final dailyRemaining = wallet?.freeDailyRemaining ??
+        me?.dailyTokensRemaining ??
+        me?.freeDailyRemaining;
+    final dailyCap = wallet?.freeDailyCap ?? me?.freeDailyCap;
+    final canGenerate = wallet?.canGenerate ?? me?.canGenerate ?? true;
+
     return Scaffold(
       appBar: AppBar(title: const Text('پلن و کیف')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                WalletBanner(
-                  canGenerate: me?.canGenerate ?? true,
-                  balance: me?.balance,
-                  dailyRemaining: me?.dailyTokensRemaining ??
-                      me?.freeDailyRemaining,
-                  dailyCap: me?.freeDailyCap,
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 12),
-                  Text(_error!,
-                      style: const TextStyle(color: PigptColors.danger)),
-                ],
-                const SizedBox(height: 16),
-                ..._plans.map(
-                  (p) => SoftCard(
-                    margin: const EdgeInsets.only(bottom: 10),
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  SoftCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(p.name,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w800)),
-                            ),
-                            if (p.current) const SoonBadge(),
-                          ],
+                        const Text(
+                          'موجودی فعلی',
+                          style: TextStyle(
+                            color: PigptColors.inkMuted,
+                            fontSize: 13,
+                          ),
                         ),
-                        if (p.description != null) ...[
-                          const SizedBox(height: 6),
-                          Text(p.description!),
-                        ],
-                        if (p.price != null) ...[
-                          const SizedBox(height: 6),
-                          Text('${p.price}'),
-                        ],
+                        const SizedBox(height: 6),
+                        Text(
+                          '${balance != null ? _fmtNum(balance) : '—'} توکن',
+                          style: Theme.of(context)
+                              .textTheme
+                              .headlineSmall
+                              ?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: PigptColors.brand,
+                              ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'رایگان باقیمانده: ${_fmtNum(wallet?.freeRemaining ?? me?.freeRemaining ?? 0)}'
+                          ' · سقف امروز: ${dailyRemaining != null ? _fmtNum(dailyRemaining) : '—'}'
+                          '${dailyCap != null ? ' / ${_fmtNum(dailyCap)}' : ''}'
+                          '${!canGenerate ? ' — برای ادامه شارژ لازم است' : ''}',
+                          style: const TextStyle(
+                            color: PigptColors.inkMuted,
+                            fontSize: 12,
+                            height: 1.5,
+                          ),
+                        ),
                         const SizedBox(height: 10),
-                        FilledButton(
-                          onPressed: p.current ? null : () => _pay(p.id),
-                          child: Text(p.current ? 'پلن فعلی' : 'خرید / ارتقا'),
+                        Text(
+                          'مصرف با توکن پلتفرم محاسبه می‌شود. پس از اتمام موجودی، تولید مسدود می‌شود تا شارژ کنید.',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: PigptColors.inkMuted),
+                        ),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton(
+                            onPressed: () => context.push('/account/usage'),
+                            child: const Text('تاریخچه مصرف توکن'),
+                          ),
                         ),
                       ],
                     ),
                   ),
-                ),
-              ],
-            ),
-    );
-  }
-}
-
-class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({super.key});
-
-  @override
-  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
-}
-
-class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  Map<String, dynamic> _settings = {};
-  List<AiModel> _models = const [];
-  Set<String> _enabledModels = {};
-  String? _defaultModel;
-  bool _loading = true;
-  String? _msg;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final api = ref.read(apiClientProvider);
-    try {
-      final settingsRes = await api.get<Map<String, dynamic>>(
-        ApiPaths.meSettings,
-        parser: (d) => Map<String, dynamic>.from(d as Map),
-      );
-      final settings = settingsRes['settings'] is Map
-          ? Map<String, dynamic>.from(settingsRes['settings'] as Map)
-          : settingsRes;
-      final prefs = await api.get<Map<String, dynamic>>(
-        ApiPaths.meModelPrefs,
-        parser: (d) => Map<String, dynamic>.from(d as Map),
-      );
-      final models = await ref.read(modelsProvider.future);
-      final enabled = <String>{};
-      final rawEnabled = prefs['enabled_model_ids'] ?? prefs['models'];
-      if (rawEnabled is List) {
-        enabled.addAll(rawEnabled.map((e) => e.toString()));
-      }
-      setState(() {
-        _settings = settings;
-        _models = models;
-        _enabledModels = enabled;
-        _defaultModel = prefs['default_model_id']?.toString();
-        _loading = false;
-      });
-    } on ApiException catch (e) {
-      setState(() {
-        _msg = e.message;
-        _loading = false;
-      });
-    }
-  }
-
-  Future<void> _saveSettings() async {
-    try {
-      await ref.read(apiClientProvider).patch(
-            ApiPaths.meSettings,
-            data: _settings,
-          );
-      final theme = _settings['theme']?.toString();
-      if (theme == 'light') {
-        ref.read(themeModeProvider.notifier).state = ThemeMode.light;
-      } else if (theme == 'system') {
-        ref.read(themeModeProvider.notifier).state = ThemeMode.system;
-      } else {
-        ref.read(themeModeProvider.notifier).state = ThemeMode.dark;
-      }
-      setState(() => _msg = 'ذخیره شد');
-    } on ApiException catch (e) {
-      setState(() => _msg = e.message);
-    }
-  }
-
-  Future<void> _saveModels() async {
-    try {
-      await ref.read(apiClientProvider).put(
-        ApiPaths.meModelPrefs,
-        data: {
-          'enabled_model_ids': _enabledModels.toList(),
-          'default_model_id': _defaultModel,
-        },
-      );
-      setState(() => _msg = 'مدل‌ها ذخیره شد');
-    } on ApiException catch (e) {
-      setState(() => _msg = e.message);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('تنظیمات')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                if (_msg != null) Text(_msg!),
-                SoftCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const SectionHeader(title: 'عمومی'),
-                      const SizedBox(height: 8),
-                      DropdownButtonFormField<String>(
-                        value: '${_settings['theme'] ?? 'dark'}',
-                        decoration: const InputDecoration(labelText: 'تم'),
-                        items: const [
-                          DropdownMenuItem(value: 'dark', child: Text('تاریک')),
-                          DropdownMenuItem(value: 'light', child: Text('روشن')),
-                          DropdownMenuItem(
-                              value: 'system', child: Text('سیستم')),
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(_error!,
+                        style: const TextStyle(color: PigptColors.danger)),
+                  ],
+                  const SizedBox(height: 20),
+                  const SectionHeader(
+                    title: 'شارژ توکن اضافه',
+                    subtitle: 'بسته‌های توکن — پرداخت در مرورگر / درگاه',
+                  ),
+                  const SizedBox(height: 10),
+                  if (_packages.isEmpty)
+                    const SoftCard(
+                      child: Text(
+                        'بسته توکنی تعریف نشده است.',
+                        style: TextStyle(color: PigptColors.inkMuted),
+                      ),
+                    )
+                  else
+                    ..._packages.map(
+                      (p) => SoftCard(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(p.name,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 6),
+                            Text(
+                              '${_fmtNum(p.tokensGranted)} توکن',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: PigptColors.brand,
+                                fontSize: 18,
+                              ),
+                            ),
+                            if (p.description != null &&
+                                p.description!.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(p.description!,
+                                  style: const TextStyle(
+                                      color: PigptColors.inkMuted,
+                                      fontSize: 13)),
+                            ],
+                            const SizedBox(height: 4),
+                            Text(_fmtPrice(p.priceRial),
+                                style: const TextStyle(
+                                    color: PigptColors.inkMuted)),
+                            const SizedBox(height: 10),
+                            FilledButton(
+                              onPressed: _busyId != null
+                                  ? null
+                                  : () => _openPayment(
+                                        {'token_package_id': p.id},
+                                        'pkg-${p.id}',
+                                      ),
+                              child: Text(_busyId == 'pkg-${p.id}'
+                                  ? '…'
+                                  : 'خرید بسته'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                  const SectionHeader(title: 'پلن‌ها'),
+                  const SizedBox(height: 10),
+                  ..._plans.map(
+                    (p) => SoftCard(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(p.name,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w800)),
+                              ),
+                              if (p.current) const CurrentPlanBadge(),
+                            ],
+                          ),
+                          if (p.description != null) ...[
+                            const SizedBox(height: 6),
+                            Text(p.description!,
+                                style: const TextStyle(
+                                    color: PigptColors.inkMuted)),
+                          ],
+                          const SizedBox(height: 6),
+                          Text(
+                            _fmtPrice(p.priceRial ?? p.price) +
+                                ((p.priceRial ?? p.price ?? 0) > 0
+                                    ? ' / ماه'
+                                    : ''),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          if ((p.tokensGranted ?? 0) > 0) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                                'توکن همراه پلن: ${_fmtNum(p.tokensGranted!)}'),
+                          ],
+                          if (p.capabilityCount != null) ...[
+                            const SizedBox(height: 2),
+                            Text('ابزارها: ${p.capabilityCount} مورد'),
+                          ],
+                          const SizedBox(height: 10),
+                          if (p.current)
+                            OutlinedButton(
+                              onPressed: null,
+                              child: const Text('پلن فعلی'),
+                            )
+                          else
+                            FilledButton(
+                              onPressed: _busyId != null
+                                  ? null
+                                  : () => _openPayment(
+                                        {'plan_id': p.id},
+                                        'plan-${p.id}',
+                                      ),
+                              child: Text(_busyId == 'plan-${p.id}'
+                                  ? '…'
+                                  : 'خرید / ارتقا'),
+                            ),
                         ],
-                        onChanged: (v) =>
-                            setState(() => _settings['theme'] = v),
                       ),
-                      const SizedBox(height: 12),
-                      DropdownButtonFormField<String>(
-                        value: '${_settings['ui_locale'] ?? 'fa'}',
-                        decoration: const InputDecoration(labelText: 'زبان'),
-                        items: const [
-                          DropdownMenuItem(value: 'fa', child: Text('فارسی')),
-                          DropdownMenuItem(value: 'en', child: Text('English')),
-                        ],
-                        onChanged: (v) =>
-                            setState(() => _settings['ui_locale'] = v),
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        initialValue: '${_settings['tone'] ?? ''}',
-                        decoration: const InputDecoration(labelText: 'لحن'),
-                        onChanged: (v) => _settings['tone'] = v,
-                      ),
-                      const SizedBox(height: 12),
-                      FilledButton(
-                          onPressed: _saveSettings,
-                          child: const Text('ذخیره تنظیمات')),
-                    ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                SoftCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const SectionHeader(
-                        title: 'مدل‌های من',
-                        subtitle: 'حداقل یک مدل باید فعال باشد',
-                      ),
-                      const SizedBox(height: 8),
-                      ..._models.map((m) {
-                        final on = _enabledModels.contains(m.id);
-                        return CheckboxListTile(
-                          value: on,
-                          title: Text(m.name),
-                          controlAffinity: ListTileControlAffinity.leading,
-                          contentPadding: EdgeInsets.zero,
-                          onChanged: (v) {
-                            setState(() {
-                              if (v == true) {
-                                _enabledModels.add(m.id);
-                              } else {
-                                _enabledModels.remove(m.id);
-                              }
-                            });
-                          },
-                        );
-                      }),
-                      DropdownButtonFormField<String>(
-                        value: _defaultModel != null &&
-                                _models.any((m) => m.id == _defaultModel)
-                            ? _defaultModel
-                            : null,
-                        decoration:
-                            const InputDecoration(labelText: 'مدل پیش‌فرض'),
-                        items: _models
-                            .map((m) => DropdownMenuItem(
-                                  value: m.id,
-                                  child: Text(m.name),
-                                ))
-                            .toList(),
-                        onChanged: (v) => setState(() => _defaultModel = v),
-                      ),
-                      const SizedBox(height: 12),
-                      FilledButton(
-                          onPressed: _saveModels,
-                          child: const Text('ذخیره مدل‌ها')),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SoftCard(
-                  child: Column(
-                    children: [
-                      ListTile(
-                        title: const Text('بایگانی همه گفتگوها'),
-                        onTap: () async {
-                          await ref
-                              .read(apiClientProvider)
-                              .post(ApiPaths.conversationsArchiveAll);
-                          setState(() => _msg = 'بایگانی شد');
-                        },
-                      ),
-                      ListTile(
-                        title: const Text('خروج از همه دستگاه‌ها'),
-                        onTap: () async {
-                          await ref
-                              .read(apiClientProvider)
-                              .post(ApiPaths.meLogoutAll);
-                          await ref
-                              .read(authControllerProvider.notifier)
-                              .logout();
-                          if (mounted) context.go('/auth');
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-    );
-  }
-}
-
-class UsageScreen extends ConsumerWidget {
-  const UsageScreen({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('مصرف')),
-      body: FutureBuilder(
-        future: () async {
-          final api = ref.read(apiClientProvider);
-          try {
-            return await api.get<dynamic>(ApiPaths.usage);
-          } catch (_) {
-            return await api.get<dynamic>(ApiPaths.billingTokenLedger);
-          }
-        }(),
-        builder: (context, snap) {
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: SoftCard(
-              child: SelectableText('${snap.data}'),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class ReferralScreen extends ConsumerWidget {
-  const ReferralScreen({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('ارجاع')),
-      body: FutureBuilder(
-        future: ref.read(apiClientProvider).get<dynamic>(ApiPaths.referral),
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snap.hasError) {
-            return EmptyState(title: 'ارجاع', body: '${snap.error}');
-          }
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: SoftCard(child: SelectableText('${snap.data}')),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class SupportScreen extends ConsumerStatefulWidget {
-  const SupportScreen({super.key});
-
-  @override
-  ConsumerState<SupportScreen> createState() => _SupportScreenState();
-}
-
-class _SupportScreenState extends ConsumerState<SupportScreen> {
-  final _subject = TextEditingController();
-  final _body = TextEditingController();
-  String? _msg;
-
-  @override
-  void dispose() {
-    _subject.dispose();
-    _body.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('پشتیبانی')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          SoftCard(
-            child: Column(
-              children: [
-                TextField(
-                  controller: _subject,
-                  decoration: const InputDecoration(labelText: 'موضوع'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _body,
-                  minLines: 4,
-                  maxLines: 8,
-                  decoration: const InputDecoration(labelText: 'متن پیام'),
-                ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () async {
-                    try {
-                      await ref.read(apiClientProvider).post(
-                        ApiPaths.supportTickets,
-                        data: {
-                          'subject': _subject.text.trim(),
-                          'body': _body.text.trim(),
-                        },
-                      );
-                      setState(() => _msg = 'تیکت ثبت شد');
-                      _subject.clear();
-                      _body.clear();
-                    } on ApiException catch (e) {
-                      setState(() => _msg = e.message);
-                    }
-                  },
-                  child: const Text('ارسال تیکت'),
-                ),
-                if (_msg != null) ...[
-                  const SizedBox(height: 8),
-                  Text(_msg!),
                 ],
-              ],
+              ),
             ),
-          ),
-        ],
-      ),
     );
   }
 }

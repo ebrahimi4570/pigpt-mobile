@@ -15,6 +15,8 @@ class PigptApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(goRouterProvider);
     final themeMode = ref.watch(themeModeProvider);
+    final locale = ref.watch(localeProvider);
+    final isFa = locale.languageCode != 'en';
 
     return DeepLinkBootstrap(
       child: MaterialApp.router(
@@ -23,7 +25,7 @@ class PigptApp extends ConsumerWidget {
         theme: PigptTheme.light(),
         darkTheme: PigptTheme.dark(),
         themeMode: themeMode,
-        locale: const Locale('fa'),
+        locale: locale,
         supportedLocales: const [Locale('fa'), Locale('en')],
         localizationsDelegates: const [
           GlobalMaterialLocalizations.delegate,
@@ -32,7 +34,7 @@ class PigptApp extends ConsumerWidget {
         ],
         builder: (context, child) {
           return Directionality(
-            textDirection: TextDirection.rtl,
+            textDirection: isFa ? TextDirection.rtl : TextDirection.ltr,
             child: child ?? const SizedBox.shrink(),
           );
         },

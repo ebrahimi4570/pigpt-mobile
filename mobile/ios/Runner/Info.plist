@@ -72,5 +72,18 @@
 	<string>PiGPT برای گرفتن عکس و پیوست به گفتگو به دوربین دسترسی می‌خواهد.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>PiGPT برای ضبط صدا در استودیوی رسانه به میکروفون دسترسی می‌خواهد.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>ir.pigpt.auth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>pigpt</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

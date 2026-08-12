@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -8,6 +9,7 @@ import '../../core/api_paths.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
 
 final agentMissionsProvider = FutureProvider<List<AgentMission>?>((ref) async {
@@ -25,7 +27,7 @@ final agentMissionsProvider = FutureProvider<List<AgentMission>?>((ref) async {
         .map((e) => AgentMission.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   } on ApiException catch (e) {
-    if (e.statusCode == 404 || e.statusCode == 410) return null; // feature flag
+    if (e.statusCode == 404 || e.statusCode == 410) return null;
     rethrow;
   }
 });
@@ -77,7 +79,7 @@ class _AgentMissionsScreenState extends ConsumerState<AgentMissionsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('ماموریت‌های ایجنت')),
       body: async.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => const ListShimmer(itemCount: 5),
         error: (e, _) => EmptyState(
           title: 'خطا در بارگذاری ماموریت‌ها',
           body: '$e',
@@ -99,7 +101,8 @@ class _AgentMissionsScreenState extends ConsumerState<AgentMissionsScreen> {
                   children: [
                     const SectionHeader(
                       title: 'هدف جدید',
-                      subtitle: 'ایجنت = یک هدف تا تکمیل · گفتگو = پرسش‌وپاسخ آزاد',
+                      subtitle:
+                          'ایجنت = یک هدف تا تکمیل · گفتگو = پرسش‌وپاسخ آزاد',
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -122,8 +125,10 @@ class _AgentMissionsScreenState extends ConsumerState<AgentMissionsScreen> {
               const SectionHeader(title: 'تاریخچه'),
               const SizedBox(height: 10),
               if (missions.isEmpty)
-                const Text('هنوز ماموریتی ندارید.',
-                    style: TextStyle(color: PigptColors.inkMuted))
+                const EmptyState(
+                  title: 'ماموریتی نیست',
+                  body: 'اولین هدف را بالا بنویسید.',
+                )
               else
                 ...missions.asMap().entries.map((e) {
                   final m = e.value;
@@ -175,12 +180,22 @@ class _AgentMissionDetailScreenState
     extends ConsumerState<AgentMissionDetailScreen> {
   AgentMission? _mission;
   String? _error;
+  String? _toolOut;
   bool _busy = false;
+  final _fileAction = TextEditingController(text: 'list');
+  final _qsPrompt = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _fileAction.dispose();
+    _qsPrompt.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -196,10 +211,16 @@ class _AgentMissionDetailScreenState
     }
   }
 
-  Future<void> _act(Future<void> Function() fn) async {
-    setState(() => _busy = true);
+  Future<void> _act(Future<dynamic> Function() fn) async {
+    setState(() {
+      _busy = true;
+      _toolOut = null;
+    });
     try {
-      await fn();
+      final res = await fn();
+      if (res is Map) {
+        setState(() => _toolOut = res.toString());
+      }
       await _load();
     } on ApiException catch (e) {
       if (mounted) {
@@ -219,7 +240,7 @@ class _AgentMissionDetailScreenState
       body: m == null
           ? (_error != null
               ? EmptyState(title: 'خطا', body: _error)
-              : const Center(child: CircularProgressIndicator()))
+              : const ListShimmer(itemCount: 4))
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -259,14 +280,17 @@ class _AgentMissionDetailScreenState
                                     color: PigptColors.inkMuted, fontSize: 12)),
                           if (s.detail != null) ...[
                             const SizedBox(height: 6),
-                            Text(s.detail!),
+                            MarkdownBody(data: s.detail!, selectable: true),
                           ],
                         ],
                       ),
                     ),
                   ),
                 const SizedBox(height: 16),
-                const SectionHeader(title: 'ابزارها'),
+                const SectionHeader(
+                  title: 'کنترل ماموریت',
+                  subtitle: 'قدم بعد، تأیید حساس، تکمیل',
+                ),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -276,7 +300,7 @@ class _AgentMissionDetailScreenState
                       onPressed: _busy
                           ? null
                           : () => _act(() async {
-                                await ref.read(apiClientProvider).post(
+                                return ref.read(apiClientProvider).post(
                                       ApiPaths.agentMissionNext(widget.id),
                                     );
                               }),
@@ -286,7 +310,7 @@ class _AgentMissionDetailScreenState
                       onPressed: _busy
                           ? null
                           : () => _act(() async {
-                                await ref.read(apiClientProvider).post(
+                                return ref.read(apiClientProvider).post(
                                       ApiPaths.agentMissionConfirm(widget.id),
                                       data: {'confirmed': true},
                                     );
@@ -297,36 +321,98 @@ class _AgentMissionDetailScreenState
                       onPressed: _busy
                           ? null
                           : () => _act(() async {
-                                await ref.read(apiClientProvider).post(
+                                return ref.read(apiClientProvider).post(
                                       ApiPaths.agentMissionComplete(widget.id),
                                     );
                               }),
                       child: const Text('تکمیل'),
                     ),
-                    OutlinedButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _act(() async {
-                                await ref.read(apiClientProvider).post(
-                                      ApiPaths.agentMissionToolFile(widget.id),
-                                      data: {'action': 'list'},
-                                    );
-                              }),
-                      child: const Text('ابزار فایل'),
-                    ),
-                    OutlinedButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _act(() async {
-                                await ref.read(apiClientProvider).post(
-                                      ApiPaths.agentMissionToolImage(widget.id),
-                                      data: {'prompt': m.goal},
-                                    );
-                              }),
-                      child: const Text('ابزار تصویر'),
-                    ),
                   ],
                 ),
+                const SizedBox(height: 20),
+                const SectionHeader(
+                  title: 'ابزارها',
+                  subtitle: 'فایل، تصویر، شروع سریع — نزدیک به وب',
+                ),
+                const SizedBox(height: 8),
+                SoftCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        controller: _fileAction,
+                        decoration: const InputDecoration(
+                          labelText: 'عملیات فایل',
+                          hintText: 'list | read | write',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _act(() async {
+                                  return ref.read(apiClientProvider).post(
+                                    ApiPaths.agentMissionToolFile(widget.id),
+                                    data: {'action': _fileAction.text.trim()},
+                                  );
+                                }),
+                        child: const Text('ابزار فایل'),
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _act(() async {
+                                  return ref.read(apiClientProvider).post(
+                                    ApiPaths.agentMissionToolImage(widget.id),
+                                    data: {'prompt': m.goal},
+                                  );
+                                }),
+                        child: const Text('ابزار تصویر'),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _qsPrompt,
+                        decoration: const InputDecoration(
+                          labelText: 'شروع سریع (اختیاری)',
+                          hintText: 'پرامپت یا خالی = هدف ماموریت',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _act(() async {
+                                  return ref.read(apiClientProvider).post(
+                                    ApiPaths.agentMissionToolQuickStart(
+                                        widget.id),
+                                    data: {
+                                      'prompt': _qsPrompt.text.trim().isEmpty
+                                          ? m.goal
+                                          : _qsPrompt.text.trim(),
+                                    },
+                                  );
+                                }),
+                        child: const Text('ابزار شروع سریع'),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_toolOut != null) ...[
+                  const SizedBox(height: 12),
+                  SoftCard(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('نتیجه ابزار',
+                            style: TextStyle(fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 8),
+                        SelectableText(_toolOut!,
+                            style: const TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
     );

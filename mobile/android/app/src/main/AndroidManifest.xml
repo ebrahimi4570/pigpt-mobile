@@ -38,6 +38,17 @@
                     android:host="auth"
                     android:pathPrefix="/callback"/>
             </intent-filter>
+            <!-- Email verify / CLI / chat / share / payment via custom scheme -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="pigpt" android:host="auth" android:pathPrefix="/verify"/>
+                <data android:scheme="pigpt" android:host="app"/>
+                <data android:scheme="pigpt" android:host="c"/>
+                <data android:scheme="pigpt" android:host="cli"/>
+                <data android:scheme="pigpt" android:host="share"/>
+            </intent-filter>
             <!-- Google OAuth return: https App Link -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
@@ -47,6 +58,17 @@
                     android:scheme="https"
                     android:host="pigpt.ir"
                     android:pathPrefix="/app/auth/callback"/>
+            </intent-filter>
+            <!-- https App Links: chat, CLI, verify, share, payment return -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https" android:host="pigpt.ir" android:pathPrefix="/app/c"/>
+                <data android:scheme="https" android:host="pigpt.ir" android:pathPrefix="/app/cli"/>
+                <data android:scheme="https" android:host="pigpt.ir" android:pathPrefix="/auth/verify"/>
+                <data android:scheme="https" android:host="pigpt.ir" android:pathPrefix="/share"/>
+                <data android:scheme="https" android:host="pigpt.ir" android:path="/app"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

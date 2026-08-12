@@ -88,7 +88,16 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Future<void> _googleLogin() async {
     final uri = Uri.parse(googleOAuthStartUrl());
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    // Prefer Custom Tabs / SFSafariViewController so the OAuth return
+    // (`pigpt://auth/callback`) lands back in-app; fall back to external browser.
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+      if (!ok) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
   }
 
   @override

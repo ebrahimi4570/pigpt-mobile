@@ -5,11 +5,14 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
+import '../../core/brand.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/studio_catalog.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
+import 'studio_workspaces.dart';
 
 /// Capabilities enabled for the current user/plan. Missing API → treat primary studios as enabled.
 final capabilitiesProvider = FutureProvider<Set<String>>((ref) async {
@@ -121,7 +124,7 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
         ],
       ),
       body: caps.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => const ListShimmer(itemCount: 5),
         error: (e, _) => EmptyState(title: 'خطا', body: '$e'),
         data: (enabled) {
           bool isOn(String? cap) {
@@ -259,7 +262,7 @@ class _StudioTile extends StatelessWidget {
   }
 }
 
-class StudioWorkspaceScreen extends ConsumerStatefulWidget {
+class StudioWorkspaceScreen extends ConsumerWidget {
   const StudioWorkspaceScreen({
     super.key,
     required this.toolId,
@@ -272,192 +275,191 @@ class StudioWorkspaceScreen extends ConsumerStatefulWidget {
   final String capability;
 
   @override
-  ConsumerState<StudioWorkspaceScreen> createState() =>
-      _StudioWorkspaceScreenState();
+  Widget build(BuildContext context, WidgetRef ref) {
+    return studioWorkspaceFor(
+      toolId: toolId,
+      title: title,
+      capability: capability,
+    );
+  }
 }
 
-class _StudioWorkspaceScreenState extends ConsumerState<StudioWorkspaceScreen> {
-  final _input = TextEditingController();
-  String? _output;
-  bool _busy = false;
+class GalleryScreen extends ConsumerStatefulWidget {
+  const GalleryScreen({super.key});
+
+  @override
+  ConsumerState<GalleryScreen> createState() => _GalleryScreenState();
+}
+
+class _GalleryScreenState extends ConsumerState<GalleryScreen> {
+  List<Map<String, dynamic>> _items = const [];
+  bool _loading = true;
   String? _error;
 
   @override
-  void dispose() {
-    _input.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _load();
   }
 
-  Future<void> _run() async {
-    final prompt = _input.text.trim();
-    if (prompt.isEmpty) return;
+  Future<void> _load() async {
     setState(() {
-      _busy = true;
+      _loading = true;
       _error = null;
-      _output = null;
     });
-    final api = ref.read(apiClientProvider);
     try {
-      Map<String, dynamic> data;
-      switch (widget.toolId) {
-        case 'image':
-          data = await api.post(
-            ApiPaths.studiosImageGenerate,
-            data: {'prompt': prompt},
-            parser: (d) => Map<String, dynamic>.from(d as Map),
-          );
-          break;
-        case 'writing':
-          data = await api.post(
-            ApiPaths.studiosWritingRun,
-            data: {'prompt': prompt, 'template_id': null},
-            parser: (d) => Map<String, dynamic>.from(d as Map),
-          );
-          break;
-        case 'coding':
-          data = await api.post(
-            ApiPaths.studiosCodingReview,
-            data: {'code': prompt},
-            parser: (d) => Map<String, dynamic>.from(d as Map),
-          );
-          break;
-        case 'analytics':
-          data = await api.post(
-            ApiPaths.studiosDataAnalyzeCsv,
-            data: {'csv_text': prompt},
-            parser: (d) => Map<String, dynamic>.from(d as Map),
-          );
-          break;
-        case 'edu':
-          data = await api.post(
-            ApiPaths.studiosEduQuiz,
-            data: {'topic': prompt},
-            parser: (d) => Map<String, dynamic>.from(d as Map),
-          );
-          break;
-        case 'media':
-          data = await api.post(
-            ApiPaths.studiosMediaOcr,
-            data: {'text_hint': prompt},
-            parser: (d) => Map<String, dynamic>.from(d as Map),
-          );
-          break;
-        default:
-          data = await api.post(
-            ApiPaths.proQualityGate,
-            data: {'content': prompt, 'studio': widget.toolId},
-            parser: (d) => Map<String, dynamic>.from(d as Map),
-          );
-      }
-      final text =
-          '${data['text'] ?? data['output'] ?? data['result'] ?? data['url'] ?? data}';
-      setState(() => _output = text);
+      final data =
+          await ref.read(apiClientProvider).get<dynamic>(ApiPaths.studiosGallery);
+      final list = data is List
+          ? data
+          : (data is Map
+              ? (data['items'] ?? data['gallery'] ?? []) as List
+              : []);
+      if (!mounted) return;
+      setState(() {
+        _items = list
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        _loading = false;
+      });
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
     }
+  }
+
+  String? _previewUrl(Map<String, dynamic> m) {
+    final u = m['preview_url'] ?? m['url'] ?? m['image_url'] ?? m['thumb_url'];
+    if (u == null || '$u'.isEmpty) return null;
+    final s = '$u';
+    if (s.startsWith('http')) return s;
+    return '${PigptBrand.apiBase}$s';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          SoftCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  controller: _input,
-                  minLines: 4,
-                  maxLines: 10,
-                  decoration: const InputDecoration(
-                    hintText: 'ورودی استودیو…',
-                    alignLabelWithHint: true,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: _busy ? null : _run,
-                  child: Text(_busy ? 'در حال اجرا…' : 'اجرا'),
-                ),
-              ],
-            ),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            Text(_error!, style: const TextStyle(color: PigptColors.danger)),
-          ],
-          if (_output != null) ...[
-            const SizedBox(height: 16),
-            SoftCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text('خروجی',
-                      style: TextStyle(fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 8),
-                  SelectableText(_output!),
-                  const SizedBox(height: 8),
-                  const Text('آماده‌شده با PiGPT',
-                      style: TextStyle(
-                          color: PigptColors.inkFaint, fontSize: 12)),
-                ],
-              ),
-            ).animate().fadeIn(),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class GalleryScreen extends ConsumerWidget {
-  const GalleryScreen({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
       appBar: AppBar(title: const Text('گالری خروجی')),
-      body: FutureBuilder(
-        future: ref.read(apiClientProvider).get<dynamic>(ApiPaths.studiosGallery),
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snap.hasError) {
-            return EmptyState(title: 'گالری', body: '${snap.error}');
-          }
-          final data = snap.data;
-          final list = data is List
-              ? data
-              : (data is Map
-                  ? (data['items'] ?? data['gallery'] ?? []) as List
-                  : []);
-          if (list.isEmpty) {
-            return const EmptyState(
-              title: 'گالری خالی است',
-              body: 'خروجی استودیوها اینجا جمع می‌شود.',
-            );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: list.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 8),
-            itemBuilder: (context, i) {
-              final m = list[i] is Map
-                  ? Map<String, dynamic>.from(list[i] as Map)
-                  : <String, dynamic>{};
-              return SoftCard(
-                child: Text('${m['title'] ?? m['id'] ?? m}'),
-              );
-            },
-          );
-        },
-      ),
+      body: _loading
+          ? const GridShimmer()
+          : _error != null
+              ? EmptyState(
+                  title: 'گالری',
+                  body: _error,
+                  action: FilledButton(
+                      onPressed: _load, child: const Text('تلاش دوباره')),
+                )
+              : _items.isEmpty
+                  ? const EmptyState(
+                      title: 'گالری خالی است',
+                      body: 'خروجی استودیوها اینجا جمع می‌شود.',
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _load,
+                      child: GridView.builder(
+                        padding: const EdgeInsets.all(16),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 10,
+                          crossAxisSpacing: 10,
+                          childAspectRatio: 0.85,
+                        ),
+                        itemCount: _items.length,
+                        itemBuilder: (context, i) {
+                          final m = _items[i];
+                          final url = _previewUrl(m);
+                          final title =
+                              '${m['title_fa'] ?? m['title'] ?? m['id'] ?? 'آیتم'}';
+                          final previewText =
+                              '${m['preview_text'] ?? m['text'] ?? ''}';
+                          return SoftCard(
+                            padding: EdgeInsets.zero,
+                            onTap: () {
+                              showDialog(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: Text(title),
+                                  content: SingleChildScrollView(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (url != null)
+                                          Image.network(url,
+                                              errorBuilder: (_, __, ___) =>
+                                                  const SizedBox.shrink()),
+                                        if (previewText.isNotEmpty) ...[
+                                          const SizedBox(height: 8),
+                                          Text(previewText),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(ctx),
+                                      child: const Text('بستن'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Expanded(
+                                  child: ClipRRect(
+                                    borderRadius: const BorderRadius.vertical(
+                                        top: Radius.circular(16)),
+                                    child: url != null
+                                        ? Image.network(
+                                            url,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (_, __, ___) =>
+                                                Container(
+                                              color: PigptColors.brandSoft,
+                                              alignment: Alignment.center,
+                                              child: const Icon(
+                                                  Icons.broken_image_outlined),
+                                            ),
+                                          )
+                                        : Container(
+                                            color: PigptColors.brandSoft,
+                                            padding: const EdgeInsets.all(12),
+                                            alignment: Alignment.center,
+                                            child: Text(
+                                              previewText.isNotEmpty
+                                                  ? previewText
+                                                  : title,
+                                              maxLines: 6,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(fontSize: 12),
+                                            ),
+                                          ),
+                                  ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.all(10),
+                                  child: Text(
+                                    title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 13),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
     );
   }
 }
+

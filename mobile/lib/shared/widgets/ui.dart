@@ -175,15 +175,35 @@ class SoonBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return const StatusBadge(label: 'به‌زودی');
+  }
+}
+
+/// Badge for the user's active subscription plan (not «به‌زودی»).
+class CurrentPlanBadge extends StatelessWidget {
+  const CurrentPlanBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const StatusBadge(label: 'پلن فعلی');
+  }
+}
+
+class StatusBadge extends StatelessWidget {
+  const StatusBadge({super.key, required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: PigptColors.brandSoft,
         borderRadius: BorderRadius.circular(999),
       ),
-      child: const Text(
-        'به‌زودی',
-        style: TextStyle(
+      child: Text(
+        label,
+        style: const TextStyle(
           color: PigptColors.brand,
           fontSize: 11,
           fontWeight: FontWeight.w700,

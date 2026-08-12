@@ -50,6 +50,26 @@ final conversationSearchProvider =
   }
 });
 
+final chatTemplatesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
+  final api = ref.watch(apiClientProvider);
+  try {
+    final data = await api.get<dynamic>(ApiPaths.chatTemplates);
+    final list = data is List
+        ? data
+        : (data is Map
+            ? (data['templates'] ?? data['items'] ?? data['data'] ?? [])
+            : []);
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  } on ApiException {
+    return const [];
+  }
+});
+
+
 class ChatSessionState {
   const ChatSessionState({
     this.conversationId,
@@ -96,8 +116,11 @@ class ChatSessionState {
 }
 
 class ChatSessionController extends StateNotifier<ChatSessionState> {
-  ChatSessionController(this._ref, this.initialId)
-      : super(ChatSessionState(conversationId: initialId)) {
+  ChatSessionController(this._ref, this.initialId, {String? initialModelId})
+      : super(ChatSessionState(
+          conversationId: initialId,
+          modelId: initialModelId,
+        )) {
     if (initialId != null) {
       load(initialId!);
     }
@@ -136,6 +159,17 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
 
   void clearPending() => state = state.copyWith(clearPending: true);
 
+  /// Clear thread to empty composer (home “گفتگوی جدید”).
+  void startFresh() {
+    _cancel?.cancel();
+    _cancel = null;
+    state = ChatSessionState(
+      conversationId: null,
+      modelId: state.modelId,
+      mode: state.mode,
+    );
+  }
+
   Future<void> attachImage(String filePath, {String? filename}) async {
     state = state.copyWith(uploading: true, clearError: true);
     try {
@@ -162,6 +196,33 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
     if (id == null) return;
     try {
       await _api.patch(ApiPaths.conversation(id), data: {'archived': archived});
+      _ref.invalidate(conversationsProvider(false));
+      _ref.invalidate(conversationsProvider(true));
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+    }
+  }
+
+  Future<void> setPinned({required bool pinned}) async {
+    final id = state.conversationId;
+    if (id == null) return;
+    try {
+      await _api.patch(
+        ApiPaths.conversation(id),
+        data: {'is_pinned': pinned, 'pinned': pinned},
+      );
+      _ref.invalidate(conversationsProvider(false));
+      _ref.invalidate(conversationsProvider(true));
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+    }
+  }
+
+  Future<void> deleteConversation() async {
+    final id = state.conversationId;
+    if (id == null) return;
+    try {
+      await _api.delete(ApiPaths.conversation(id));
       _ref.invalidate(conversationsProvider(false));
       _ref.invalidate(conversationsProvider(true));
     } on ApiException catch (e) {
@@ -253,6 +314,8 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
       state = state.copyWith(streaming: false);
       await _ref.read(authControllerProvider.notifier).refreshMe();
       _ref.invalidate(conversationsProvider(false));
+      // Refresh so message ids are server UUIDs (needed for edit).
+      await load(convId);
     } on ApiException catch (e) {
       _patchAssistant(assistantId, buffer, streaming: false, error: e.message);
       state = state.copyWith(streaming: false, error: e.message);
@@ -281,7 +344,10 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
     try {
       await for (final event in _api.postSse(
         ApiPaths.conversationRegenerate(convId),
-        data: {'mode': state.mode},
+        data: {
+          'mode': state.mode,
+          if (state.modelId != null) 'model_id': state.modelId,
+        },
         cancelToken: _cancel,
       )) {
         if (event.event == 'token') {
@@ -298,6 +364,67 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
       state = state.copyWith(streaming: false);
       await _ref.read(authControllerProvider.notifier).refreshMe();
     } on ApiException catch (e) {
+      state = state.copyWith(streaming: false, error: e.message);
+    }
+  }
+
+  /// Edit a user message, truncate later turns, and stream a fresh reply.
+  Future<void> editMessage(String messageId, String newContent) async {
+    final convId = state.conversationId;
+    final text = newContent.trim();
+    if (convId == null || text.isEmpty || state.streaming) return;
+
+    final idx = state.messages.indexWhere((m) => m.id == messageId);
+    if (idx < 0) return;
+    final original = state.messages[idx];
+    if (original.role != 'user') return;
+
+    final kept = state.messages.take(idx).toList();
+    final edited = original.copyWith(content: text);
+    final assistantId = 'local-a-${DateTime.now().microsecondsSinceEpoch}';
+    final assistant = ChatMessage(
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      streaming: true,
+      modelId: state.modelId,
+    );
+    state = state.copyWith(
+      messages: [...kept, edited, assistant],
+      streaming: true,
+      clearError: true,
+    );
+
+    _cancel = CancelToken();
+    var buffer = '';
+    try {
+      await for (final event in _api.postSse(
+        ApiPaths.messageEdit(convId, messageId),
+        data: {
+          'content': text,
+          'mode': state.mode,
+          if (state.modelId != null) 'model_id': state.modelId,
+        },
+        cancelToken: _cancel,
+      )) {
+        if (event.event == 'token') {
+          buffer += '${event.data['text'] ?? ''}';
+          _patchAssistant(assistantId, buffer, streaming: true);
+        } else if (event.event == 'error') {
+          final err =
+              '${event.data['error_message_fa'] ?? event.data['message_fa'] ?? event.data['detail'] ?? 'خطا در ویرایش'}';
+          _patchAssistant(assistantId, buffer, streaming: false, error: err);
+          state = state.copyWith(streaming: false, error: err);
+          return;
+        }
+      }
+      _patchAssistant(assistantId, buffer, streaming: false);
+      state = state.copyWith(streaming: false);
+      await _ref.read(authControllerProvider.notifier).refreshMe();
+      _ref.invalidate(conversationsProvider(false));
+      await load(convId);
+    } on ApiException catch (e) {
+      _patchAssistant(assistantId, buffer, streaming: false, error: e.message);
       state = state.copyWith(streaming: false, error: e.message);
     }
   }
@@ -320,9 +447,30 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
   }
 }
 
+/// Family key: conversation id, optional initial model from `/models` extra.
+class ChatSessionKey {
+  const ChatSessionKey({this.conversationId, this.initialModelId});
+  final String? conversationId;
+  final String? initialModelId;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ChatSessionKey &&
+      other.conversationId == conversationId &&
+      other.initialModelId == initialModelId;
+
+  @override
+  int get hashCode => Object.hash(conversationId, initialModelId);
+}
+
 final chatSessionProvider = StateNotifierProvider.autoDispose
-    .family<ChatSessionController, ChatSessionState, String?>((ref, id) {
-  return ChatSessionController(ref, id);
+    .family<ChatSessionController, ChatSessionState, ChatSessionKey>(
+        (ref, key) {
+  return ChatSessionController(
+    ref,
+    key.conversationId,
+    initialModelId: key.initialModelId,
+  );
 });
 
 List<dynamic> _asList(dynamic data, {List<String> keys = const []}) {

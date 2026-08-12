@@ -22,6 +22,12 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.dark);
 
+/// UI locale from Settings (`ui_locale`). Defaults to Persian.
+final localeProvider = StateProvider<Locale>((ref) => const Locale('fa'));
+
+/// Whether TTS output is enabled (from settings.speech.voice_output).
+final speechOutputEnabledProvider = StateProvider<bool>((ref) => true);
+
 enum AuthStatus { unknown, signedOut, signedIn, needsVerification }
 
 class AuthState {

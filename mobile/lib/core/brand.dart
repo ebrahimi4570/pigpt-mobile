@@ -16,6 +16,9 @@ class PigptBrand {
   static const oauthCallback = 'pigpt://auth/callback';
   /// Optional https App Link return (assetlinks.json on pigpt.ir).
   static const oauthAppLinkCallback = 'https://pigpt.ir/app/auth/callback';
+  /// Zarinpal callback hits API then redirects to `{web}/app?billing=ok|failed`.
+  /// App Links / custom scheme can bridge back: listen for `billing=` on `/app`.
+  static const paymentReturnPath = '/app';
   static const downloadsUrl = 'https://pigpt.ir/downloads/picode/';
   static const installUnix =
       'curl -fsSL https://pigpt.ir/install-picode.sh | bash';

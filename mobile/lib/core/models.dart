@@ -138,8 +138,8 @@ class Conversation {
         updatedAt: j['updated_at'] != null
             ? DateTime.tryParse(j['updated_at'].toString())
             : null,
-        archived: j['archived'] == true,
-        pinned: j['pinned'] == true,
+        archived: j['archived'] == true || j['archived_at'] != null,
+        pinned: j['pinned'] == true || j['is_pinned'] == true,
       );
 }
 
@@ -313,7 +313,7 @@ class QuickStartCard {
 
   factory QuickStartCard.fromJson(Map<String, dynamic> j) {
     final fields = <QuickStartField>[];
-    final raw = j['fields'];
+    final raw = j['fields'] ?? j['steps'];
     if (raw is List) {
       for (final f in raw) {
         if (f is Map) {
@@ -324,8 +324,10 @@ class QuickStartCard {
     final qo = j['quality_options'];
     return QuickStartCard(
       id: '${j['id'] ?? j['card_id']}',
-      title: '${j['title'] ?? j['name'] ?? ''}',
-      description: j['description']?.toString() ?? j['blurb']?.toString(),
+      title: '${j['title'] ?? j['name'] ?? j['title_fa'] ?? ''}',
+      description: j['description']?.toString() ??
+          j['description_fa']?.toString() ??
+          j['blurb']?.toString(),
       kind: '${j['kind'] ?? 'text'}',
       fields: fields,
       qualityOptions: qo is List
@@ -351,8 +353,10 @@ class QuickStartField {
 
   factory QuickStartField.fromJson(Map<String, dynamic> j) => QuickStartField(
         id: '${j['id'] ?? j['key'] ?? j['name']}',
-        label: '${j['label'] ?? j['title'] ?? j['id']}',
-        hint: j['hint']?.toString() ?? j['placeholder']?.toString(),
+        label: '${j['label'] ?? j['label_fa'] ?? j['title'] ?? j['id']}',
+        hint: j['hint']?.toString() ??
+            j['hint_fa']?.toString() ??
+            j['placeholder']?.toString(),
         required: j['required'] == true,
         type: '${j['type'] ?? 'text'}',
       );
@@ -363,21 +367,146 @@ class BillingPlan {
     required this.id,
     required this.name,
     this.price,
+    this.priceRial,
     this.description,
     this.current = false,
+    this.tokensGranted,
+    this.capabilityCount,
   });
   final String id;
   final String name;
   final num? price;
+  final num? priceRial;
   final String? description;
   final bool current;
+  final num? tokensGranted;
+  final int? capabilityCount;
 
-  factory BillingPlan.fromJson(Map<String, dynamic> j) => BillingPlan(
+  factory BillingPlan.fromJson(Map<String, dynamic> j) {
+    final caps = j['allow_capabilities'];
+    return BillingPlan(
+      id: '${j['id']}',
+      name: '${j['name_fa'] ?? j['name'] ?? j['title'] ?? ''}',
+      price: j['price'] as num? ?? j['amount'] as num?,
+      priceRial: j['price_rial'] as num?,
+      description:
+          j['description_fa']?.toString() ?? j['description']?.toString(),
+      current: j['current'] == true,
+      tokensGranted: j['platform_tokens_granted'] as num?,
+      capabilityCount: caps is List ? caps.length : null,
+    );
+  }
+}
+
+class TokenPackage {
+  TokenPackage({
+    required this.id,
+    required this.name,
+    required this.tokensGranted,
+    this.priceRial,
+    this.description,
+    this.code,
+  });
+  final String id;
+  final String name;
+  final num tokensGranted;
+  final num? priceRial;
+  final String? description;
+  final String? code;
+
+  factory TokenPackage.fromJson(Map<String, dynamic> j) => TokenPackage(
         id: '${j['id']}',
-        name: '${j['name'] ?? j['title'] ?? ''}',
-        price: j['price'] as num? ?? j['amount'] as num?,
-        description: j['description']?.toString(),
-        current: j['current'] == true,
+        name: '${j['name_fa'] ?? j['name'] ?? j['title'] ?? ''}',
+        tokensGranted: j['tokens_granted'] as num? ?? j['tokens'] as num? ?? 0,
+        priceRial: j['price_rial'] as num? ?? j['price'] as num?,
+        description:
+            j['description_fa']?.toString() ?? j['description']?.toString(),
+        code: j['code']?.toString(),
+      );
+}
+
+class BillingWallet {
+  BillingWallet({
+    required this.balance,
+    this.freeRemaining,
+    this.paidAvailable,
+    this.freeDailyCap,
+    this.freeDailyRemaining,
+    this.canGenerate = true,
+  });
+  final num balance;
+  final num? freeRemaining;
+  final num? paidAvailable;
+  final num? freeDailyCap;
+  final num? freeDailyRemaining;
+  final bool canGenerate;
+
+  factory BillingWallet.fromJson(Map<String, dynamic> j) {
+    final w = j['wallet'] is Map
+        ? Map<String, dynamic>.from(j['wallet'] as Map)
+        : j;
+    return BillingWallet(
+      balance: w['balance'] as num? ?? 0,
+      freeRemaining: w['free_remaining'] as num?,
+      paidAvailable: w['paid_available'] as num?,
+      freeDailyCap: w['free_daily_cap'] as num?,
+      freeDailyRemaining: w['free_daily_remaining'] as num?,
+      canGenerate: w['can_generate'] != false,
+    );
+  }
+}
+
+class ImagePreset {
+  ImagePreset({required this.id, required this.name});
+  final String id;
+  final String name;
+
+  factory ImagePreset.fromJson(Map<String, dynamic> j) => ImagePreset(
+        id: '${j['id'] ?? j['code'] ?? ''}',
+        name: '${j['name_fa'] ?? j['name'] ?? j['id'] ?? ''}',
+      );
+}
+
+class WritingTemplate {
+  WritingTemplate({
+    required this.id,
+    required this.name,
+    this.description,
+    this.steps = const [],
+  });
+  final String id;
+  final String name;
+  final String? description;
+  final List<WritingStep> steps;
+
+  factory WritingTemplate.fromJson(Map<String, dynamic> j) {
+    final steps = <WritingStep>[];
+    final raw = j['steps'];
+    if (raw is List) {
+      for (final s in raw) {
+        if (s is Map) {
+          steps.add(WritingStep.fromJson(Map<String, dynamic>.from(s)));
+        }
+      }
+    }
+    return WritingTemplate(
+      id: '${j['id']}',
+      name: '${j['name_fa'] ?? j['name'] ?? ''}',
+      description:
+          j['description_fa']?.toString() ?? j['description']?.toString(),
+      steps: steps,
+    );
+  }
+}
+
+class WritingStep {
+  WritingStep({required this.id, required this.name});
+  final String id;
+  final String name;
+
+  factory WritingStep.fromJson(Map<String, dynamic> j) => WritingStep(
+        id: '${j['id']}',
+        name: '${j['name_fa'] ?? j['name'] ?? j['id']}',
       );
 }
 

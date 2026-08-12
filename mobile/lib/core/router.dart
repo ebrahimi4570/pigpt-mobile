@@ -3,12 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/account/account_screens.dart';
+import '../features/account/settings_screen.dart';
+import '../features/account/usage_referral_support.dart';
 import '../features/agent/agent_screens.dart';
 import '../features/auth/auth_screen.dart';
 import '../features/chat/chat_screens.dart';
 import '../features/picode_guide/picode_screen.dart';
 import '../features/quick_start/quick_start_screens.dart';
+import '../features/share/share_screen.dart';
+import '../features/studios/image_studio_screen.dart';
 import '../features/studios/studios_screens.dart';
+import '../features/studios/writing_studio_screen.dart';
 import '../shared/widgets/shell.dart';
 import 'providers.dart';
 import 'studio_catalog.dart';
@@ -26,6 +31,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       final loc = state.matchedLocation;
       final loggingIn = loc.startsWith('/auth');
       final splash = loc == '/splash';
+      final publicShare = loc.startsWith('/share/');
+
+      if (publicShare) return null;
 
       if (auth.status == AuthStatus.unknown || splash) {
         if (auth.status == AuthStatus.unknown) return '/splash';
@@ -55,6 +63,12 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const SplashScreen(),
       ),
       GoRoute(
+        path: '/share/:token',
+        builder: (_, state) => ShareViewerScreen(
+          token: state.pathParameters['token']!,
+        ),
+      ),
+      GoRoute(
         path: '/auth',
         builder: (_, state) => AuthScreen(
           mode: state.uri.queryParameters['mode'] ?? 'login',
@@ -80,17 +94,46 @@ final goRouterProvider = Provider<GoRouter>((ref) {
             routes: [
               GoRoute(
                 path: '/chat',
-                builder: (_, __) => const ChatListScreen(),
+                builder: (_, state) {
+                  final extra = state.extra;
+                  final modelId = extra is String
+                      ? extra
+                      : (extra is Map
+                          ? extra['model_id']?.toString()
+                          : null);
+                  // Home = new-chat composer (archive/list is secondary).
+                  return ChatThreadScreen(
+                    conversationId: null,
+                    initialModelId: modelId,
+                    isHome: true,
+                  );
+                },
                 routes: [
                   GoRoute(
+                    path: 'history',
+                    builder: (_, __) => const ChatListScreen(),
+                  ),
+                  GoRoute(
                     path: 'new',
-                    builder: (_, __) =>
-                        const ChatThreadScreen(conversationId: null),
+                    builder: (_, state) {
+                      final extra = state.extra;
+                      final modelId = extra is String
+                          ? extra
+                          : (extra is Map
+                              ? extra['model_id']?.toString()
+                              : null);
+                      return ChatThreadScreen(
+                        conversationId: null,
+                        initialModelId: modelId,
+                        isHome: true,
+                      );
+                    },
                   ),
                   GoRoute(
                     path: ':id',
                     builder: (_, state) => ChatThreadScreen(
                       conversationId: state.pathParameters['id'],
+                      initialModelId: state.uri.queryParameters['model'],
                     ),
                   ),
                 ],
@@ -126,11 +169,19 @@ final goRouterProvider = Provider<GoRouter>((ref) {
                   ...StudioCatalog.allTools.map(
                     (t) => GoRoute(
                       path: t.routeName ?? 'studio-${t.id}',
-                      builder: (_, __) => StudioWorkspaceScreen(
-                        toolId: t.id,
-                        title: t.label,
-                        capability: t.capability,
-                      ),
+                      builder: (_, __) {
+                        if (t.id == 'image') {
+                          return const ImageStudioScreen();
+                        }
+                        if (t.id == 'writing') {
+                          return const WritingStudioScreen();
+                        }
+                        return StudioWorkspaceScreen(
+                          toolId: t.id,
+                          title: t.label,
+                          capability: t.capability,
+                        );
+                      },
                     ),
                   ),
                 ],
@@ -145,7 +196,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
                 routes: [
                   GoRoute(
                     path: 'plans',
-                    builder: (_, __) => const PlansScreen(),
+                    builder: (_, state) => PlansScreen(
+                      billingStatus: state.uri.queryParameters['billing'],
+                    ),
                   ),
                   GoRoute(
                     path: 'usage',
@@ -162,6 +215,14 @@ final goRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: 'support',
                     builder: (_, __) => const SupportScreen(),
+                    routes: [
+                      GoRoute(
+                        path: ':id',
+                        builder: (_, state) => SupportTicketDetailScreen(
+                          id: state.pathParameters['id']!,
+                        ),
+                      ),
+                    ],
                   ),
                   GoRoute(
                     path: 'picode',
