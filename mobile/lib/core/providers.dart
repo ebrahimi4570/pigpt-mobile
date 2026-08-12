@@ -160,6 +160,14 @@ class AuthController extends StateNotifier<AuthState> {
     state = const AuthState(status: AuthStatus.signedOut);
   }
 
+  /// Apply JWT from Google OAuth deep-link return (custom scheme / App Link).
+  Future<void> applyOAuthToken(String token) async {
+    final t = token.trim();
+    if (t.isEmpty) return;
+    await _store.write(t);
+    await bootstrap();
+  }
+
   Future<AuthMethods> fetchMethods() async {
     return _api.get(
       ApiPaths.authMethods,

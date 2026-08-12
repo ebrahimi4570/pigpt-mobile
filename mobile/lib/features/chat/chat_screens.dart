@@ -157,11 +157,12 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
                           children: [
                             CircleAvatar(
                               backgroundColor: PigptColors.brandSoft,
-                              child: Text(
-                                PigptBrand.logoMark,
-                                style: const TextStyle(
-                                  color: PigptColors.brand,
-                                  fontWeight: FontWeight.w800,
+                              child: Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: Image.asset(
+                                  PigptBrand.logoAsset,
+                                  fit: BoxFit.contain,
+                                  semanticLabel: PigptBrand.webDisplay,
                                 ),
                               ),
                             ),

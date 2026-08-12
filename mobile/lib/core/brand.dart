@@ -5,11 +5,17 @@ class PigptBrand {
   static const webDisplay = 'PiGPT';
   static const cliDisplay = 'PiCode';
   static const taglineFa = 'پلتفرم هوش مصنوعی فارسی';
-  static const logoMark = 'π';
+  /// Real product mark (same asset as pigpt.ir SPA `brand-pi.png`).
+  static const logoAsset = 'assets/brand/brand-pi.png';
+  static const logoAssetHiRes = 'assets/brand/brand-pi-512.png';
   static const apiBase = 'https://pigpt.ir';
   static const apiPrefix = '/api/v1';
   static const privacyUrl = 'https://pigpt.ir/privacy';
   static const webUrl = 'https://pigpt.ir';
+  /// Custom-scheme OAuth return (must match Android intent-filter + API allowlist).
+  static const oauthCallback = 'pigpt://auth/callback';
+  /// Optional https App Link return (assetlinks.json on pigpt.ir).
+  static const oauthAppLinkCallback = 'https://pigpt.ir/app/auth/callback';
   static const downloadsUrl = 'https://pigpt.ir/downloads/picode/';
   static const installUnix =
       'curl -fsSL https://pigpt.ir/install-picode.sh | bash';

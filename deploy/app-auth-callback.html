@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PiGPT — بازگشت به اپ</title>
+  <style>
+    body { font-family: Vazirmatn, Tahoma, sans-serif; background:#0b1220; color:#e2e8f0;
+      display:flex; min-height:100vh; align-items:center; justify-content:center; margin:0; padding:24px; text-align:center; }
+    a { color:#5eead4; }
+  </style>
+</head>
+<body>
+  <main>
+    <p>در حال بازگشت به اپلیکیشن PiGPT…</p>
+    <p><a id="open" href="pigpt://auth/callback">باز کردن اپ</a></p>
+  </main>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var token = params.get("access_token");
+      if (!token && location.hash) {
+        token = new URLSearchParams(location.hash.replace(/^#/, "")).get("access_token");
+      }
+      if (!token) return;
+      var target = "pigpt://auth/callback?access_token=" + encodeURIComponent(token);
+      document.getElementById("open").href = target;
+      location.replace(target);
+    })();
+  </script>
+</body>
+</html>

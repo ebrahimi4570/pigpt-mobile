@@ -1,7 +1,7 @@
 name: pigpt_mobile
 description: PiGPT — Persian AI platform mobile app (Flutter).
 publish_to: "none"
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ^3.12.2
@@ -28,11 +28,21 @@ dependencies:
   shimmer: ^3.0.0
   image_picker: ^1.1.2
   flutter_tts: ^4.2.3
+  app_links: ^6.4.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/brand/brand-pi-512.png
+  adaptive_icon_background: "#0E1A2E"
+  adaptive_icon_foreground: assets/brand/brand-pi-512.png
+  remove_alpha_ios: true
 
 flutter:
   uses-material-design: true

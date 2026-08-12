@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
+import '../../core/brand.dart';
 import '../../core/theme.dart';
 
 class PigptMark extends StatelessWidget {
@@ -10,33 +11,16 @@ class PigptMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return SizedBox(
       width: size,
       height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [PigptColors.brandDeep, PigptColors.brand],
-          begin: Alignment.topRight,
-          end: Alignment.bottomLeft,
-        ),
-        borderRadius: BorderRadius.circular(size * 0.28),
-        boxShadow: [
-          BoxShadow(
-            color: PigptColors.brand.withValues(alpha: 0.25),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Text(
-        'π',
-        style: TextStyle(
-          fontSize: size * 0.55,
-          fontWeight: FontWeight.w800,
-          color: const Color(0xFF042F2E),
-          height: 1,
-        ),
+      child: Image.asset(
+        PigptBrand.logoAsset,
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+        semanticLabel: PigptBrand.webDisplay,
       ),
     );
   }

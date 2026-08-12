@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
 import '../../core/brand.dart';
+import '../../core/deep_links.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/ui.dart';
@@ -86,9 +87,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 
   Future<void> _googleLogin() async {
-    final uri = Uri.parse(
-      '${PigptBrand.apiBase}/api/v1/auth/google/start?next=pigpt://auth/callback',
-    );
+    final uri = Uri.parse(googleOAuthStartUrl());
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
