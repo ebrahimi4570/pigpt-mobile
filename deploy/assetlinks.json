@@ -4,7 +4,9 @@
     "target": {
       "namespace": "android_app",
       "package_name": "ir.pigpt.pigpt_mobile",
-      "sha256_cert_fingerprints": []
+      "sha256_cert_fingerprints": [
+        "07:2D:C1:61:1D:A8:12:6F:F4:D6:A7:46:CD:DE:A9:23:F4:33:40:B2:BE:DC:A9:E3:67:D6:1D:AA:65:11:0F:3F"
+      ]
     }
   }
 ]
