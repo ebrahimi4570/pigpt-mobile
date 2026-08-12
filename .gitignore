@@ -16,3 +16,8 @@ build/
 *.jks
 key.properties
 .DS_Store
+
+analyze.log
+analyze2.log
+test.log
+
