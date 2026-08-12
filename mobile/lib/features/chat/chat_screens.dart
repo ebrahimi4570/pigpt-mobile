@@ -4,6 +4,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/api_client.dart';
@@ -11,6 +12,7 @@ import '../../core/api_paths.dart';
 import '../../core/brand.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
+import '../../core/speech.dart';
 import '../../core/starter_prompts.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/ui.dart';
@@ -115,13 +117,20 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
                 ),
               ),
               data: (list) {
-                final filtered = _query.isEmpty
-                    ? list
-                    : list
-                        .where((c) =>
-                            (c.title ?? '').contains(_query) ||
-                            c.id.contains(_query))
-                        .toList();
+                final searchAsync = _query.length >= 2
+                    ? ref.watch(conversationSearchProvider(_query))
+                    : null;
+                final filtered = searchAsync?.asData?.value ??
+                    (_query.isEmpty
+                        ? list
+                        : list
+                            .where((c) =>
+                                (c.title ?? '').contains(_query) ||
+                                c.id.contains(_query))
+                            .toList());
+                if (searchAsync != null && searchAsync.isLoading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
                 if (filtered.isEmpty) {
                   return EmptyState(
                     title: 'هنوز گفتگویی نیست',
@@ -274,6 +283,38 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     }
   }
 
+  Future<void> _pickImage(ChatSessionController ctrl) async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('گالری'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('دوربین'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    final picked = await ImagePicker().pickImage(
+      source: source,
+      imageQuality: 85,
+      maxWidth: 2048,
+    );
+    if (picked == null) return;
+    await ctrl.attachImage(picked.path, filename: picked.name);
+  }
+
   @override
   Widget build(BuildContext context) {
     final id = widget.conversationId == 'new' ? null : widget.conversationId;
@@ -297,12 +338,17 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
               icon: const Icon(Icons.ios_share_rounded),
             ),
           PopupMenuButton<String>(
-            onSelected: (v) {
+            onSelected: (v) async {
               if (v == 'regenerate') ctrl.regenerate();
               if (v == 'agent') context.push('/agent');
+              if (v == 'archive' && session.conversationId != null) {
+                await ctrl.archive(archived: true);
+                if (context.mounted) context.go('/chat');
+              }
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'regenerate', child: Text('بازتولید پاسخ')),
+              PopupMenuItem(value: 'archive', child: Text('بایگانی گفتگو')),
               PopupMenuItem(value: 'agent', child: Text('ماموریت ایجنت')),
             ],
           ),
@@ -367,6 +413,26 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                 style: const TextStyle(color: PigptColors.danger),
               ),
             ),
+          if (session.pending != null || session.uploading)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Row(
+                children: [
+                  if (session.uploading)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Chip(
+                      avatar: const Icon(Icons.image_outlined, size: 16),
+                      label: Text(session.pending!.name, overflow: TextOverflow.ellipsis),
+                      onDeleted: ctrl.clearPending,
+                    ),
+                ],
+              ),
+            ),
           SafeArea(
             top: false,
             child: Padding(
@@ -374,6 +440,13 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  IconButton(
+                    tooltip: 'پیوست تصویر',
+                    onPressed: session.streaming || session.uploading
+                        ? null
+                        : () => _pickImage(ctrl),
+                    icon: const Icon(Icons.add_photo_alternate_outlined),
+                  ),
                   Expanded(
                     child: TextField(
                       controller: _input,
@@ -427,7 +500,12 @@ class _EmptyChat extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        const SizedBox(height: 24),
+        const SizedBox(height: 12),
+        const Center(child: PigptMark(size: 72))
+            .animate()
+            .fadeIn(duration: 400.ms)
+            .scale(begin: const Offset(0.9, 0.9)),
+        const SizedBox(height: 16),
         Text(
           'از کجا شروع کنیم؟',
           textAlign: TextAlign.center,
@@ -483,6 +561,17 @@ class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (message.attachmentIds.isNotEmpty) ...[
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Chip(
+                    avatar: const Icon(Icons.image_outlined, size: 16),
+                    label: Text('${message.attachmentIds.length} پیوست'),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               if (isUser)
                 SelectableText(message.content)
               else
@@ -511,6 +600,13 @@ class _MessageBubble extends StatelessWidget {
                           color: PigptColors.inkFaint,
                         ),
                       ),
+                    ),
+                    IconButton(
+                      tooltip: 'پخش صدا',
+                      onPressed: message.content.isEmpty
+                          ? null
+                          : () => SpeechService.speak(message.content),
+                      icon: const Icon(Icons.volume_up_rounded, size: 16),
                     ),
                     IconButton(
                       tooltip: 'کپی',

@@ -41,6 +41,16 @@ void main() {
     expect(me.balance, 10);
   });
 
+  test('ChatMessage parses attachment_ids', () {
+    final m = ChatMessage.fromJson({
+      'id': 'm1',
+      'role': 'user',
+      'content': 'سلام',
+      'attachment_ids': ['a1', 'a2'],
+    });
+    expect(m.attachmentIds, ['a1', 'a2']);
+  });
+
   test('SSE event parse token', () {
     final e = SseEvent.parse('event: token\ndata: {"text":"سلام"}');
     expect(e, isNotNull);

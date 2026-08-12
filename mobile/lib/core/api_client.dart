@@ -135,6 +135,36 @@ class ApiClient {
     }
   }
 
+  /// Multipart upload to `/uploads`. Returns `{id, ...}`.
+  Future<Map<String, dynamic>> uploadFile(
+    String filePath, {
+    String fieldName = 'file',
+    String? filename,
+  }) async {
+    try {
+      final form = FormData.fromMap({
+        fieldName: await MultipartFile.fromFile(
+          filePath,
+          filename: filename,
+        ),
+      });
+      final res = await _dio.post<dynamic>(
+        '/uploads',
+        data: form,
+        options: Options(
+          contentType: 'multipart/form-data',
+          headers: {'Content-Type': 'multipart/form-data'},
+        ),
+      );
+      if (res.data is Map) {
+        return Map<String, dynamic>.from(res.data as Map);
+      }
+      throw ApiException('پاسخ آپلود نامعتبر بود');
+    } on DioException catch (e) {
+      throw _mapError(e);
+    }
+  }
+
   /// POST and consume SSE `text/event-stream` body.
   Stream<SseEvent> postSse(
     String path, {

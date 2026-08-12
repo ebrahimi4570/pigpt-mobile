@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Pigpt Mobile</string>
+	<string>PiGPT</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>PiGPT برای پیوست تصویر به گفتگو به گالری دسترسی می‌خواهد.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>PiGPT برای گرفتن عکس و پیوست به گفتگو به دوربین دسترسی می‌خواهد.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>PiGPT برای ضبط صدا در استودیوی رسانه به میکروفون دسترسی می‌خواهد.</string>
 </dict>
 </plist>

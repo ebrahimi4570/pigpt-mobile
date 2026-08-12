@@ -143,6 +143,17 @@ class Conversation {
       );
 }
 
+class PendingAttachment {
+  const PendingAttachment({
+    required this.id,
+    required this.name,
+    this.localPath,
+  });
+  final String id;
+  final String name;
+  final String? localPath;
+}
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -152,6 +163,7 @@ class ChatMessage {
     this.errorFa,
     this.createdAt,
     this.streaming = false,
+    this.attachmentIds = const [],
   });
 
   final String id;
@@ -161,12 +173,14 @@ class ChatMessage {
   final String? errorFa;
   final DateTime? createdAt;
   final bool streaming;
+  final List<String> attachmentIds;
 
   ChatMessage copyWith({
     String? content,
     String? errorFa,
     bool? streaming,
     String? modelId,
+    List<String>? attachmentIds,
   }) =>
       ChatMessage(
         id: id,
@@ -176,18 +190,29 @@ class ChatMessage {
         errorFa: errorFa ?? this.errorFa,
         createdAt: createdAt,
         streaming: streaming ?? this.streaming,
+        attachmentIds: attachmentIds ?? this.attachmentIds,
       );
 
-  factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
-        id: '${j['id'] ?? j['message_id'] ?? DateTime.now().microsecondsSinceEpoch}',
-        role: '${j['role'] ?? 'assistant'}',
-        content: '${j['content'] ?? j['text'] ?? ''}',
-        modelId: j['model_id']?.toString(),
-        errorFa: j['error_message_fa']?.toString() ?? j['error_fa']?.toString(),
-        createdAt: j['created_at'] != null
-            ? DateTime.tryParse(j['created_at'].toString())
-            : null,
-      );
+  factory ChatMessage.fromJson(Map<String, dynamic> j) {
+    final raw = j['attachment_ids'];
+    final ids = <String>[];
+    if (raw is List) {
+      for (final e in raw) {
+        ids.add('$e');
+      }
+    }
+    return ChatMessage(
+      id: '${j['id'] ?? j['message_id'] ?? DateTime.now().microsecondsSinceEpoch}',
+      role: '${j['role'] ?? 'assistant'}',
+      content: '${j['content'] ?? j['text'] ?? ''}',
+      modelId: j['model_id']?.toString(),
+      errorFa: j['error_message_fa']?.toString() ?? j['error_fa']?.toString(),
+      createdAt: j['created_at'] != null
+          ? DateTime.tryParse(j['created_at'].toString())
+          : null,
+      attachmentIds: ids,
+    );
+  }
 }
 
 class AgentMission {

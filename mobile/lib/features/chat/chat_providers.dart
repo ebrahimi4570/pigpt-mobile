@@ -30,6 +30,26 @@ final conversationsProvider =
       .toList();
 });
 
+final conversationSearchProvider =
+    FutureProvider.family<List<Conversation>, String>((ref, query) async {
+  final q = query.trim();
+  if (q.length < 2) return const [];
+  final api = ref.watch(apiClientProvider);
+  try {
+    final data = await api.get<dynamic>(
+      ApiPaths.conversationsSearch,
+      query: {'q': q},
+    );
+    final list = _asList(data, keys: ['conversations', 'items', 'data']);
+    return list
+        .whereType<Map>()
+        .map((e) => Conversation.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  } on ApiException {
+    return const [];
+  }
+});
+
 class ChatSessionState {
   const ChatSessionState({
     this.conversationId,
@@ -38,6 +58,8 @@ class ChatSessionState {
     this.error,
     this.modelId,
     this.mode = 'chat',
+    this.pending,
+    this.uploading = false,
   });
 
   final String? conversationId;
@@ -46,6 +68,8 @@ class ChatSessionState {
   final String? error;
   final String? modelId;
   final String mode; // chat | agent
+  final PendingAttachment? pending;
+  final bool uploading;
 
   ChatSessionState copyWith({
     String? conversationId,
@@ -54,7 +78,10 @@ class ChatSessionState {
     String? error,
     String? modelId,
     String? mode,
+    PendingAttachment? pending,
+    bool? uploading,
     bool clearError = false,
+    bool clearPending = false,
   }) =>
       ChatSessionState(
         conversationId: conversationId ?? this.conversationId,
@@ -63,6 +90,8 @@ class ChatSessionState {
         error: clearError ? null : (error ?? this.error),
         modelId: modelId ?? this.modelId,
         mode: mode ?? this.mode,
+        pending: clearPending ? null : (pending ?? this.pending),
+        uploading: uploading ?? this.uploading,
       );
 }
 
@@ -105,6 +134,41 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
 
   void setModel(String modelId) => state = state.copyWith(modelId: modelId);
 
+  void clearPending() => state = state.copyWith(clearPending: true);
+
+  Future<void> attachImage(String filePath, {String? filename}) async {
+    state = state.copyWith(uploading: true, clearError: true);
+    try {
+      final data = await _api.uploadFile(filePath, filename: filename);
+      final id = '${data['id'] ?? ''}';
+      if (id.isEmpty) {
+        throw ApiException('آپلود بدون شناسه برگشت');
+      }
+      state = state.copyWith(
+        uploading: false,
+        pending: PendingAttachment(
+          id: id,
+          name: filename ?? filePath.split(RegExp(r'[\\/]')).last,
+          localPath: filePath,
+        ),
+      );
+    } on ApiException catch (e) {
+      state = state.copyWith(uploading: false, error: e.message);
+    }
+  }
+
+  Future<void> archive({required bool archived}) async {
+    final id = state.conversationId;
+    if (id == null) return;
+    try {
+      await _api.patch(ApiPaths.conversation(id), data: {'archived': archived});
+      _ref.invalidate(conversationsProvider(false));
+      _ref.invalidate(conversationsProvider(true));
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+    }
+  }
+
   void stop() {
     _cancel?.cancel('user');
     _cancel = null;
@@ -136,13 +200,16 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
 
   Future<void> send(String content) async {
     final text = content.trim();
-    if (text.isEmpty || state.streaming) return;
+    final attachmentIds =
+        state.pending == null ? const <String>[] : [state.pending!.id];
+    if ((text.isEmpty && attachmentIds.isEmpty) || state.streaming) return;
     await ensureConversation();
     final convId = state.conversationId!;
     final userMsg = ChatMessage(
       id: 'local-u-${DateTime.now().microsecondsSinceEpoch}',
       role: 'user',
-      content: text,
+      content: text.isEmpty ? 'تصویر پیوست شد' : text,
+      attachmentIds: attachmentIds,
     );
     final assistantId = 'local-a-${DateTime.now().microsecondsSinceEpoch}';
     final assistant = ChatMessage(
@@ -156,6 +223,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
       messages: [...state.messages, userMsg, assistant],
       streaming: true,
       clearError: true,
+      clearPending: true,
     );
 
     _cancel = CancelToken();
@@ -167,6 +235,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
           'content': text,
           'mode': state.mode,
           if (state.modelId != null) 'model_id': state.modelId,
+          if (attachmentIds.isNotEmpty) 'attachment_ids': attachmentIds,
         },
         cancelToken: _cancel,
       )) {

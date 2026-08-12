@@ -20,6 +20,9 @@ API base is fixed to `https://pigpt.ir` (override only via code for staging).
 
 - Auth (email/password, optional Google via browser)
 - Chat with SSE streaming, chat/agent mode, model picker, rotating starters (no auto-TTS)
+- Image attachments on chat (`POST /uploads` + `attachment_ids`)
+- Conversation search (server) and archive
+- Manual speaker button only (never auto-play)
 - Agent missions UI
 - Quick Start wizards
 - User studios hub (enabled capabilities; «به‌زودی» for others)
