@@ -12,8 +12,149 @@ import '../../core/brand.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/app_chrome.dart';
 import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
+
+List<QuickStartOpt> _fallbackChips(String cardId, String fieldId) {
+  const map = <String, List<String>>{
+    'blog_post::topic': [
+      'راهنمای خرید کفش ورزشی',
+      'مقایسه قیمت گوشی',
+      'آموزش سئو برای فروشگاه',
+      'نکات تغذیه سالم',
+      'شروع کسب‌وکار خانگی',
+      'بررسی محصول جدید',
+    ],
+    'blog_post::audience': [
+      'مشتریان ایرانی فروشگاه آنلاین',
+      'والدین',
+      'صاحبان فروشگاه',
+      'علاقه‌مندان ورزش',
+      'دانشجویان',
+      'کسب‌وکارهای کوچک',
+    ],
+    'product_desc::product_name': [
+      'کرم مرطوب‌کننده',
+      'کفش ورزشی مردانه',
+      'قهوه عربیکا',
+      'کیف چرمی زنانه',
+      'مکمل ویتامین D',
+      'هدفون بی‌سیم',
+    ],
+    'product_desc::features': [
+      'ارسال رایگان',
+      'ضمانت اصالت',
+      'مناسب پوست حساس',
+      'ساخت ایران',
+      'بسته‌بندی شیک',
+      'مناسب هدیه',
+    ],
+    'product_desc::audience': [
+      'خریداران آنلاین',
+      'بانوان ۲۰ تا ۴۰ سال',
+      'ورزشکاران',
+      'والدین',
+      'کسب‌وکارها',
+      'هدیه‌خرها',
+    ],
+    'ig_caption::topic': [
+      'معرفی محصول جدید',
+      'پشت‌صحنه کارگاه',
+      'تخفیف آخر هفته',
+      'نظر مشتری',
+      'آموزش کوتاه',
+      'مناسبت تقویمی',
+    ],
+    'social_image::prompt': [
+      'ویترین فروشگاه کفش با نور گرم، حس دعوت‌کننده',
+      'محصول روی میز چوبی با پس‌زمینه ساده و نور طبیعی',
+      'بنر حراج با رنگ‌های زنده و محصول در مرکز',
+      'کافه دنج با نور طلایی غروب',
+      'بسته‌بندی شیک محصول آرایشی روی سنگ مرمر',
+      'غذای ایرانی تازه در ظرف سفالی',
+      'نور طبیعی نرم',
+      'سبک مینیمال',
+      'فضای لوکس',
+      'عکاسی تبلیغاتی حرفه‌ای',
+    ],
+    'social_image::overlay_text': [
+      'افتتاحیه',
+      '۲۰٪ تخفیف',
+      'ارسال رایگان',
+      'محصول جدید',
+      'فقط امروز',
+      'همین حالا بخر',
+    ],
+    'customer_msg::situation': [
+      'مشتری تأخیر ارسال را پیگیری کرده',
+      'درخواست مرجوعی کالا',
+      'سؤال درباره موجودی',
+      'تشکر بعد از خرید',
+      'پیگیری پرداخت ناموفق',
+      'شکایت از کیفیت محصول',
+    ],
+    'week_ideas::business_type': [
+      'فروشگاه لوازم آرایشی',
+      'کافه',
+      'آموزشگاه',
+      'فروشگاه پوشاک',
+      'کلینیک زیبایی',
+      'فروشگاه آنلاین',
+    ],
+    'week_ideas::topic': [
+      'این هفته',
+      'شروع فصل مدرسه',
+      'حراج نوروز',
+      'یلدا',
+      'جمعه سیاه',
+      'روز مادر',
+    ],
+  };
+  final labels = map['$cardId::$fieldId'];
+  if (labels == null) return const [];
+  return [for (final s in labels) QuickStartOpt(value: s, label: s)];
+}
+
+List<String> _splitChipParts(String raw, bool newline) {
+  final s = raw.trim();
+  if (s.isEmpty) return const [];
+  return (newline ? s.split(RegExp(r'\n+')) : s.split(RegExp(r'[،,]\s*')))
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
+}
+
+String _joinChipParts(List<String> parts, bool newline) =>
+    newline ? parts.join('\n') : parts.join('، ');
+
+bool _chipOn(QuickStartField field, String current, QuickStartOpt chip) {
+  final cur = current.trim();
+  if (cur.isEmpty) return false;
+  if (field.multi) {
+    final parts = _splitChipParts(cur, field.type == 'textarea');
+    return parts.contains(chip.value) || parts.contains(chip.label);
+  }
+  return cur == chip.value || cur == chip.label;
+}
+
+String _applyChip(QuickStartField field, String current, QuickStartOpt chip) {
+  if (field.multi) {
+    final newline = field.type == 'textarea';
+    final parts = _splitChipParts(current, newline);
+    final idx = parts.indexWhere((p) => p == chip.value || p == chip.label);
+    if (idx >= 0) {
+      parts.removeAt(idx);
+    } else {
+      parts.add(chip.label.isNotEmpty ? chip.label : chip.value);
+    }
+    return _joinChipParts(parts, newline);
+  }
+  if (current.trim() == chip.value || current.trim() == chip.label) {
+    return current;
+  }
+  return chip.value;
+}
 
 final quickStartCardsProvider = FutureProvider<List<QuickStartCard>>((ref) async {
   final api = ref.watch(apiClientProvider);
@@ -58,7 +199,7 @@ class QuickStartHubScreen extends ConsumerWidget {
     final history = ref.watch(quickStartHistoryProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('شروع سریع')),
+      appBar: const PigptAppBar(title: 'شروع سریع'),
       body: cards.when(
         loading: () => const ListShimmer(itemCount: 6),
         error: (e, _) => EmptyState(
@@ -77,13 +218,13 @@ class QuickStartHubScreen extends ConsumerWidget {
               ref.invalidate(quickStartHistoryProvider);
             },
             child: ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
               children: [
                 const SectionHeader(
                   title: 'ویزاردهای آماده',
                   subtitle: 'شش مسیر سریع برای تولید متن یا تصویر',
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 8),
                 if (shown.isEmpty)
                   const EmptyState(
                     title: 'کارتی نیست',
@@ -93,13 +234,13 @@ class QuickStartHubScreen extends ConsumerWidget {
                   ...shown.asMap().entries.map((e) {
                     final c = e.value;
                     return SoftCard(
-                      margin: const EdgeInsets.only(bottom: 10),
+                      dense: true,
                       onTap: () => context.push('/quick-start/${c.id}'),
                       child: Row(
                         children: [
                           Container(
-                            width: 44,
-                            height: 44,
+                            width: 32,
+                            height: 32,
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
                               color: PigptColors.brandSoft,
@@ -112,18 +253,19 @@ class QuickStartHubScreen extends ConsumerWidget {
                               color: PigptColors.brand,
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(c.title,
                                     style: const TextStyle(
-                                        fontWeight: FontWeight.w800)),
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 14)),
                                 if (c.description != null)
                                   Text(
                                     c.description!,
-                                    maxLines: 2,
+                                    maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
                                       color: PigptColors.inkMuted,
@@ -225,7 +367,7 @@ class _QuickStartWizardScreenState
           : data;
       final card = QuickStartCard.fromJson(cardJson);
       for (final f in card.fields) {
-        _values[f.id] = TextEditingController();
+        _values[f.id] = TextEditingController(text: f.defaultValue ?? '');
       }
       final fus = data['follow_ups'];
       setState(() {
@@ -378,7 +520,7 @@ class _QuickStartWizardScreenState
   Widget build(BuildContext context) {
     final card = _card;
     return Scaffold(
-      appBar: AppBar(title: Text(card?.title ?? 'ویزارد')),
+      appBar: PigptAppBar(title: card?.title ?? 'ویزارد', showBack: true),
       body: card == null
           ? (_error != null
               ? EmptyState(title: 'خطا', body: _error)
@@ -391,16 +533,60 @@ class _QuickStartWizardScreenState
                       style: const TextStyle(color: PigptColors.inkMuted)),
                 const SizedBox(height: 16),
                 ...card.fields.map((f) {
+                  final chips = f.chips.isNotEmpty
+                      ? f.chips
+                      : _fallbackChips(card.id, f.id);
+                  final ctrl = _values[f.id];
                   return Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: TextField(
-                      controller: _values[f.id],
-                      decoration: InputDecoration(
-                        labelText: f.label,
-                        hintText: f.hint,
-                      ),
-                      minLines: f.type == 'textarea' ? 3 : 1,
-                      maxLines: f.type == 'textarea' ? 6 : 1,
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(f.label,
+                            style: Theme.of(context).textTheme.titleSmall),
+                        if (chips.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: chips.map((o) {
+                              final on = _chipOn(f, ctrl?.text ?? '', o);
+                              return FilterChip(
+                                label: Text(o.label),
+                                selected: on,
+                                onSelected: (_) {
+                                  final next =
+                                      _applyChip(f, ctrl?.text ?? '', o);
+                                  ctrl?.text = next;
+                                  ctrl?.selection = TextSelection.collapsed(
+                                      offset: next.length);
+                                  setState(() {});
+                                },
+                              );
+                            }).toList(),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            f.multi
+                                ? 'چند پیشنهاد را انتخاب کنید یا خودتان بنویسید.'
+                                : 'یک پیشنهاد را انتخاب کنید یا خودتان بنویسید.',
+                            style: const TextStyle(
+                              color: PigptColors.inkFaint,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: ctrl,
+                          decoration: InputDecoration(
+                            hintText: f.hint ?? 'یا متن خودتان را بنویسید…',
+                          ),
+                          minLines: f.type == 'textarea' ? 3 : 1,
+                          maxLines: f.type == 'textarea' ? 6 : 1,
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ],
                     ),
                   );
                 }),
@@ -411,7 +597,12 @@ class _QuickStartWizardScreenState
                   spacing: 8,
                   children: card.qualityOptions.map((q) {
                     return ChoiceChip(
-                      label: Text(q),
+                      label: Text(card.qualityLabels[q] ??
+                          (q == 'fast'
+                              ? 'سریع'
+                              : q == 'quality'
+                                  ? 'باکیفیت‌تر'
+                                  : q)),
                       selected: _quality == q,
                       onSelected: (_) => setState(() => _quality = q),
                     );

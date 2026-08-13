@@ -41,7 +41,12 @@ class _DeepLinkBootstrapState extends ConsumerState<DeepLinkBootstrap> {
     if (_lastHandled == key) return;
     _lastHandled = key;
 
-    // 1) OAuth access token
+    // 1) OAuth access token (or error= from Google)
+    final oauthErr = _extractOAuthError(uri);
+    if (oauthErr != null) {
+      ref.read(authControllerProvider.notifier);
+      return;
+    }
     final token = _extractAccessToken(uri);
     if (token != null && token.isNotEmpty) {
       await ref.read(authControllerProvider.notifier).applyOAuthToken(token);
@@ -87,11 +92,16 @@ class _DeepLinkBootstrapState extends ConsumerState<DeepLinkBootstrap> {
       router.go('/account/plans?billing=$billing');
       return;
     }
+
+    // 7) Quick Start /app/quick-start/:cardId
+    final qs = _extractQuickStart(uri);
+    if (qs != null) {
+      router.go(qs == 'hub' ? '/quick-start' : '/quick-start/$qs');
+      return;
+    }
   }
 
-  /// Accepts `pigpt://auth/callback` and `https://pigpt.ir/app/auth/callback`
-  /// with `access_token` in query or fragment.
-  static String? _extractAccessToken(Uri uri) {
+  static bool _isOAuthCallback(Uri uri) {
     final isCustom = uri.scheme == 'pigpt' &&
         (uri.host == 'auth' || uri.pathSegments.contains('auth')) &&
         (uri.path == '/callback' ||
@@ -101,7 +111,19 @@ class _DeepLinkBootstrapState extends ConsumerState<DeepLinkBootstrap> {
         uri.host == 'pigpt.ir' &&
         (uri.path == '/app/auth/callback' ||
             uri.path.startsWith('/app/auth/callback'));
-    if (!isCustom && !isAppLink) return null;
+    return isCustom || isAppLink;
+  }
+
+  static String? _extractOAuthError(Uri uri) {
+    if (!_isOAuthCallback(uri)) return null;
+    final e = uri.queryParameters['error'] ?? uri.queryParameters['error_description'];
+    return (e != null && e.isNotEmpty) ? e : null;
+  }
+
+  /// Accepts `pigpt://auth/callback` and `https://pigpt.ir/app/auth/callback`
+  /// with `access_token` in query or fragment.
+  static String? _extractAccessToken(Uri uri) {
+    if (!_isOAuthCallback(uri)) return null;
 
     final q = uri.queryParameters['access_token'];
     if (q != null && q.isNotEmpty) return q;
@@ -161,6 +183,17 @@ class _DeepLinkBootstrapState extends ConsumerState<DeepLinkBootstrap> {
       if (uri.scheme == 'pigpt') return segs[i + 1];
     }
     return null;
+  }
+
+  static String? _extractQuickStart(Uri uri) {
+    final segs = uri.pathSegments;
+    final okHost = (uri.scheme == 'https' && uri.host == 'pigpt.ir') ||
+        uri.scheme == 'pigpt';
+    if (!okHost) return null;
+    final i = segs.indexOf('quick-start');
+    if (i < 0) return null;
+    if (i + 1 < segs.length && segs[i + 1].isNotEmpty) return segs[i + 1];
+    return 'hub';
   }
 
   /// Backend payment callback redirects to `{web}/app?billing=ok|failed|missing`.

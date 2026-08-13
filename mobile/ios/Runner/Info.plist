@@ -71,7 +71,11 @@
 	<key>NSCameraUsageDescription</key>
 	<string>PiGPT برای گرفتن عکس و پیوست به گفتگو به دوربین دسترسی می‌خواهد.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>PiGPT برای ضبط صدا در استودیوی رسانه به میکروفون دسترسی می‌خواهد.</string>
+	<string>PiGPT برای ورودی صوتی گفتگو و تبدیل گفتار به متن به میکروفون نیاز دارد.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>PiGPT برای تبدیل گفتار فارسی به متن در گفتگو از تشخیص گفتار دستگاه استفاده می‌کند.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>PiGPT برای ذخیره تصویر خروجی در گالری دستگاه به دسترسی نیاز دارد.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

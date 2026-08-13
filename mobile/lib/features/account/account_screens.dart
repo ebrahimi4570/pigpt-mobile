@@ -10,6 +10,7 @@ import '../../core/brand.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/app_chrome.dart';
 import '../../shared/widgets/ui.dart';
 
 class AccountHubScreen extends ConsumerWidget {
@@ -19,7 +20,7 @@ class AccountHubScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(meProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('حساب')),
+      appBar: const PigptAppBar(title: 'حساب'),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -66,6 +67,8 @@ class AccountHubScreen extends ConsumerWidget {
           const SizedBox(height: 16),
           _tile(context, Icons.credit_card_rounded, 'پلن و کیف‌توکن',
               '/account/plans'),
+          _tile(context, Icons.receipt_long_outlined, 'فاکتورها',
+              '/account/invoices'),
           _tile(context, Icons.bar_chart_rounded, 'مصرف', '/account/usage'),
           _tile(context, Icons.tune_rounded, 'تنظیمات و مدل‌های من',
               '/account/settings'),
@@ -273,7 +276,7 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
     final canGenerate = wallet?.canGenerate ?? me?.canGenerate ?? true;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('پلن و کیف')),
+      appBar: const PigptAppBar(title: 'پلن و کیف', showBack: true),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -475,7 +478,7 @@ class AboutScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('درباره PiGPT')),
+      appBar: const PigptAppBar(title: 'درباره PiGPT', showBack: true),
       body: FutureBuilder(
         future: PackageInfo.fromPlatform(),
         builder: (context, snap) {

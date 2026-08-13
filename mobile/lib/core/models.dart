@@ -164,6 +164,7 @@ class ChatMessage {
     this.createdAt,
     this.streaming = false,
     this.attachmentIds = const [],
+    this.localPath,
   });
 
   final String id;
@@ -174,6 +175,7 @@ class ChatMessage {
   final DateTime? createdAt;
   final bool streaming;
   final List<String> attachmentIds;
+  final String? localPath;
 
   ChatMessage copyWith({
     String? content,
@@ -181,6 +183,7 @@ class ChatMessage {
     bool? streaming,
     String? modelId,
     List<String>? attachmentIds,
+    String? localPath,
   }) =>
       ChatMessage(
         id: id,
@@ -191,6 +194,7 @@ class ChatMessage {
         createdAt: createdAt,
         streaming: streaming ?? this.streaming,
         attachmentIds: attachmentIds ?? this.attachmentIds,
+        localPath: localPath ?? this.localPath,
       );
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) {
@@ -294,6 +298,19 @@ class AgentStep {
       );
 }
 
+class QuickStartOpt {
+  const QuickStartOpt({required this.value, required this.label});
+  final String value;
+  final String label;
+
+  factory QuickStartOpt.fromJson(Map<String, dynamic> j) {
+    final value = '${j['value'] ?? j['id'] ?? j['label_fa'] ?? j['label'] ?? ''}'.trim();
+    final label =
+        '${j['label_fa'] ?? j['label'] ?? j['title'] ?? j['value'] ?? value}'.trim();
+    return QuickStartOpt(value: value, label: label.isEmpty ? value : label);
+  }
+}
+
 class QuickStartCard {
   QuickStartCard({
     required this.id,
@@ -302,6 +319,7 @@ class QuickStartCard {
     this.kind = 'text',
     this.fields = const [],
     this.qualityOptions = const ['fast'],
+    this.qualityLabels = const {},
   });
 
   final String id;
@@ -310,6 +328,7 @@ class QuickStartCard {
   final String kind;
   final List<QuickStartField> fields;
   final List<String> qualityOptions;
+  final Map<String, String> qualityLabels;
 
   factory QuickStartCard.fromJson(Map<String, dynamic> j) {
     final fields = <QuickStartField>[];
@@ -322,17 +341,39 @@ class QuickStartCard {
       }
     }
     final qo = j['quality_options'];
+    final ids = <String>[];
+    final labels = <String, String>{};
+    if (qo is List) {
+      for (final e in qo) {
+        if (e is Map) {
+          final m = Map<String, dynamic>.from(e);
+          final id = '${m['id'] ?? m['value'] ?? ''}'.trim();
+          if (id.isEmpty) continue;
+          ids.add(id);
+          labels[id] = '${m['label_fa'] ?? m['label'] ?? id}';
+        } else {
+          final id = e.toString().trim();
+          if (id.isEmpty) continue;
+          ids.add(id);
+          labels[id] = id == 'fast'
+              ? 'سریع'
+              : id == 'quality'
+                  ? 'باکیفیت‌تر'
+                  : id;
+        }
+      }
+    }
     return QuickStartCard(
       id: '${j['id'] ?? j['card_id']}',
       title: '${j['title'] ?? j['name'] ?? j['title_fa'] ?? ''}',
       description: j['description']?.toString() ??
           j['description_fa']?.toString() ??
+          j['blurb_fa']?.toString() ??
           j['blurb']?.toString(),
       kind: '${j['kind'] ?? 'text'}',
       fields: fields,
-      qualityOptions: qo is List
-          ? qo.map((e) => e.toString()).toList()
-          : const ['fast', 'balanced', 'best'],
+      qualityOptions: ids.isNotEmpty ? ids : const ['fast', 'quality'],
+      qualityLabels: labels,
     );
   }
 }
@@ -344,21 +385,61 @@ class QuickStartField {
     this.hint,
     this.required = false,
     this.type = 'text',
+    this.multi = false,
+    this.defaultValue,
+    this.suggestions = const [],
+    this.options = const [],
   });
   final String id;
   final String label;
   final String? hint;
   final bool required;
   final String type;
+  final bool multi;
+  final String? defaultValue;
+  final List<QuickStartOpt> suggestions;
+  final List<QuickStartOpt> options;
+
+  List<QuickStartOpt> get chips {
+    final src = suggestions.isNotEmpty ? suggestions : options;
+    final seen = <String>{};
+    final out = <QuickStartOpt>[];
+    for (final o in src) {
+      if (o.value.isEmpty || seen.contains(o.value)) continue;
+      seen.add(o.value);
+      out.add(o);
+    }
+    return out;
+  }
+
+  static List<QuickStartOpt> _parseOpts(dynamic raw) {
+    if (raw is! List) return const [];
+    final out = <QuickStartOpt>[];
+    for (final e in raw) {
+      if (e is Map) {
+        final o = QuickStartOpt.fromJson(Map<String, dynamic>.from(e));
+        if (o.value.isNotEmpty) out.add(o);
+      } else {
+        final s = e.toString().trim();
+        if (s.isNotEmpty) out.add(QuickStartOpt(value: s, label: s));
+      }
+    }
+    return out;
+  }
 
   factory QuickStartField.fromJson(Map<String, dynamic> j) => QuickStartField(
         id: '${j['id'] ?? j['key'] ?? j['name']}',
         label: '${j['label'] ?? j['label_fa'] ?? j['title'] ?? j['id']}',
         hint: j['hint']?.toString() ??
             j['hint_fa']?.toString() ??
+            j['placeholder_fa']?.toString() ??
             j['placeholder']?.toString(),
         required: j['required'] == true,
         type: '${j['type'] ?? 'text'}',
+        multi: j['multi'] == true,
+        defaultValue: j['default']?.toString() ?? j['default_value']?.toString(),
+        suggestions: _parseOpts(j['suggestions']),
+        options: _parseOpts(j['options']),
       );
 }
 

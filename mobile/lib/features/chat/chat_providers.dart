@@ -5,6 +5,7 @@ import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
+import 'chat_limits.dart';
 
 final modelsProvider = FutureProvider<List<AiModel>>((ref) async {
   final api = ref.watch(apiClientProvider);
@@ -73,6 +74,7 @@ final chatTemplatesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) a
 class ChatSessionState {
   const ChatSessionState({
     this.conversationId,
+    this.title,
     this.messages = const [],
     this.streaming = false,
     this.error,
@@ -80,9 +82,14 @@ class ChatSessionState {
     this.mode = 'chat',
     this.pending,
     this.uploading = false,
+    this.hasOlder = false,
+    this.loadingOlder = false,
+    this.usedTokens = 0,
+    this.capTokens = kChatContextCapTokens,
   });
 
   final String? conversationId;
+  final String? title;
   final List<ChatMessage> messages;
   final bool streaming;
   final String? error;
@@ -90,9 +97,25 @@ class ChatSessionState {
   final String mode; // chat | agent
   final PendingAttachment? pending;
   final bool uploading;
+  final bool hasOlder;
+  final bool loadingOlder;
+  final int usedTokens;
+  final int capTokens;
+
+  double get fill {
+    final cap = capTokens <= 0 ? kChatContextCapTokens : capTokens;
+    var extra = 0;
+    for (final m in messages) {
+      if (m.id.startsWith('local-')) extra += estimateTokens(m.content);
+    }
+    return ((usedTokens + extra) / cap).clamp(0.0, 1.0);
+  }
+
+  bool get isFull => fill >= 1;
 
   ChatSessionState copyWith({
     String? conversationId,
+    String? title,
     List<ChatMessage>? messages,
     bool? streaming,
     String? error,
@@ -100,11 +123,16 @@ class ChatSessionState {
     String? mode,
     PendingAttachment? pending,
     bool? uploading,
+    bool? hasOlder,
+    bool? loadingOlder,
+    int? usedTokens,
+    int? capTokens,
     bool clearError = false,
     bool clearPending = false,
   }) =>
       ChatSessionState(
         conversationId: conversationId ?? this.conversationId,
+        title: title ?? this.title,
         messages: messages ?? this.messages,
         streaming: streaming ?? this.streaming,
         error: clearError ? null : (error ?? this.error),
@@ -112,6 +140,10 @@ class ChatSessionState {
         mode: mode ?? this.mode,
         pending: clearPending ? null : (pending ?? this.pending),
         uploading: uploading ?? this.uploading,
+        hasOlder: hasOlder ?? this.hasOlder,
+        loadingOlder: loadingOlder ?? this.loadingOlder,
+        usedTokens: usedTokens ?? this.usedTokens,
+        capTokens: capTokens ?? this.capTokens,
       );
 }
 
@@ -136,20 +168,95 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
     try {
       final data = await _api.get<Map<String, dynamic>>(
         ApiPaths.conversation(id),
+        query: {'limit': kChatMessagePageSize},
         parser: (d) => Map<String, dynamic>.from(d as Map),
       );
+      final keptPaths = <String, String>{};
+      String? lastUserPath;
+      for (final m in state.messages) {
+        if (m.localPath == null || m.localPath!.isEmpty) continue;
+        keptPaths[m.id] = m.localPath!;
+        if (m.role == 'user') lastUserPath = m.localPath;
+      }
       final msgs = _asList(data, keys: ['messages', 'items'])
           .whereType<Map>()
-          .map((e) => ChatMessage.fromJson(Map<String, dynamic>.from(e)))
+          .map((e) {
+            var msg = ChatMessage.fromJson(Map<String, dynamic>.from(e));
+            final prev = keptPaths[msg.id];
+            if (prev != null) msg = msg.copyWith(localPath: prev);
+            return msg;
+          })
           .toList();
+      if (lastUserPath != null) {
+        for (var i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role == 'user' &&
+              (msgs[i].localPath == null || msgs[i].localPath!.isEmpty) &&
+              msgs[i].attachmentIds.isNotEmpty) {
+            msgs[i] = msgs[i].copyWith(localPath: lastUserPath);
+            break;
+          }
+        }
+      }
+      final vol = data['volume'] is Map
+          ? Map<String, dynamic>.from(data['volume'] as Map)
+          : const <String, dynamic>{};
       state = state.copyWith(
         conversationId: id,
+        title: data['title']?.toString() ?? state.title,
         messages: msgs,
         modelId: data['model_id']?.toString() ?? state.modelId,
+        hasOlder: data['has_older'] == true,
+        usedTokens: (vol['used_tokens'] as num?)?.toInt() ?? 0,
+        capTokens: (vol['cap_tokens'] as num?)?.toInt() ?? kChatContextCapTokens,
         clearError: true,
       );
     } on ApiException catch (e) {
       state = state.copyWith(error: e.message);
+    }
+  }
+
+  Future<void> loadOlder() async {
+    final id = state.conversationId;
+    if (id == null ||
+        state.loadingOlder ||
+        !state.hasOlder ||
+        state.streaming ||
+        state.messages.isEmpty) {
+      return;
+    }
+    final oldest = state.messages.first;
+    if (oldest.id.startsWith('local-')) return;
+    state = state.copyWith(loadingOlder: true);
+    try {
+      final data = await _api.get<Map<String, dynamic>>(
+        ApiPaths.conversationMessages(id),
+        query: {
+          'limit': kChatMessagePageSize,
+          'before': oldest.id,
+        },
+        parser: (d) => Map<String, dynamic>.from(d as Map),
+      );
+      final older = _asList(data, keys: ['messages', 'items'])
+          .whereType<Map>()
+          .map((e) => ChatMessage.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+      final seen = {for (final m in state.messages) m.id};
+      final merged = [
+        ...older.where((m) => !seen.contains(m.id)),
+        ...state.messages,
+      ];
+      final vol = data['volume'] is Map
+          ? Map<String, dynamic>.from(data['volume'] as Map)
+          : null;
+      state = state.copyWith(
+        messages: merged,
+        hasOlder: data['has_older'] == true,
+        loadingOlder: false,
+        usedTokens: (vol?['used_tokens'] as num?)?.toInt() ?? state.usedTokens,
+        capTokens: (vol?['cap_tokens'] as num?)?.toInt() ?? state.capTokens,
+      );
+    } on ApiException catch (e) {
+      state = state.copyWith(loadingOlder: false, error: e.message);
     }
   }
 
@@ -165,12 +272,28 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
     _cancel = null;
     state = ChatSessionState(
       conversationId: null,
+      title: null,
       modelId: state.modelId,
       mode: state.mode,
+      capTokens: kChatContextCapTokens,
     );
   }
 
-  Future<void> attachImage(String filePath, {String? filename}) async {
+  Future<void> rename(String title) async {
+    final id = state.conversationId;
+    final t = title.trim();
+    if (id == null || t.isEmpty) return;
+    try {
+      await _api.patch(ApiPaths.conversation(id), data: {'title': t});
+      state = state.copyWith(title: t);
+      _ref.invalidate(conversationsProvider(false));
+      _ref.invalidate(conversationsProvider(true));
+    } on ApiException catch (e) {
+      state = state.copyWith(error: e.message);
+    }
+  }
+
+  Future<void> attachFile(String filePath, {String? filename}) async {
     state = state.copyWith(uploading: true, clearError: true);
     try {
       final data = await _api.uploadFile(filePath, filename: filename);
@@ -255,6 +378,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
     );
     state = state.copyWith(
       conversationId: '${created['id']}',
+      title: created['title']?.toString() ?? state.title,
       modelId: created['model_id']?.toString() ?? modelId,
     );
   }
@@ -263,14 +387,29 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
     final text = content.trim();
     final attachmentIds =
         state.pending == null ? const <String>[] : [state.pending!.id];
-    if ((text.isEmpty && attachmentIds.isEmpty) || state.streaming) return;
+    final textIsImageRef = text.contains('/uploads/') ||
+        text.contains('/assets/') ||
+        RegExp(r'\.(png|jpe?g|gif|webp|heic)$', caseSensitive: false)
+            .hasMatch(text) ||
+        text.startsWith('/data/') ||
+        text.startsWith('/storage/') ||
+        text.contains('/cache/');
+    final sendText = (text.isEmpty || (attachmentIds.isNotEmpty && textIsImageRef))
+        ? ''
+        : text;
+    if ((sendText.isEmpty && attachmentIds.isEmpty) || state.streaming) return;
+    if (state.isFull) {
+      state = state.copyWith(error: kChatFullFa);
+      return;
+    }
     await ensureConversation();
     final convId = state.conversationId!;
     final userMsg = ChatMessage(
       id: 'local-u-${DateTime.now().microsecondsSinceEpoch}',
       role: 'user',
-      content: text.isEmpty ? 'تصویر پیوست شد' : text,
+      content: sendText.isEmpty ? 'تصویر پیوست شد' : sendText,
       attachmentIds: attachmentIds,
+      localPath: state.pending?.localPath,
     );
     final assistantId = 'local-a-${DateTime.now().microsecondsSinceEpoch}';
     final assistant = ChatMessage(
@@ -293,7 +432,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
       await for (final event in _api.postSse(
         ApiPaths.conversationMessages(convId),
         data: {
-          'content': text,
+          'content': sendText,
           'mode': state.mode,
           if (state.modelId != null) 'model_id': state.modelId,
           if (attachmentIds.isNotEmpty) 'attachment_ids': attachmentIds,
@@ -310,15 +449,18 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
           return;
         }
       }
-      _patchAssistant(assistantId, buffer, streaming: false);
-      state = state.copyWith(streaming: false);
+      _finishAssistant(assistantId, buffer);
       await _ref.read(authControllerProvider.notifier).refreshMe();
       _ref.invalidate(conversationsProvider(false));
-      // Refresh so message ids are server UUIDs (needed for edit).
       await load(convId);
+    } on StreamCancelled {
+      _finishCancelled(assistantId, buffer);
     } on ApiException catch (e) {
-      _patchAssistant(assistantId, buffer, streaming: false, error: e.message);
-      state = state.copyWith(streaming: false, error: e.message);
+      final msg = buffer.trim().isEmpty
+          ? e.message
+          : '${e.message}\nاتصال قطع شد — متن ناقص را می‌بینید.';
+      _patchAssistant(assistantId, buffer, streaming: false, error: msg);
+      state = state.copyWith(streaming: false, error: msg);
     }
   }
 
@@ -360,10 +502,12 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
           return;
         }
       }
-      _patchAssistant(assistantId, buffer, streaming: false);
-      state = state.copyWith(streaming: false);
+      _finishAssistant(assistantId, buffer);
       await _ref.read(authControllerProvider.notifier).refreshMe();
+    } on StreamCancelled {
+      _finishCancelled(assistantId, buffer);
     } on ApiException catch (e) {
+      _patchAssistant(assistantId, buffer, streaming: false, error: e.message);
       state = state.copyWith(streaming: false, error: e.message);
     }
   }
@@ -418,15 +562,39 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
           return;
         }
       }
-      _patchAssistant(assistantId, buffer, streaming: false);
-      state = state.copyWith(streaming: false);
+      _finishAssistant(assistantId, buffer);
       await _ref.read(authControllerProvider.notifier).refreshMe();
       _ref.invalidate(conversationsProvider(false));
       await load(convId);
+    } on StreamCancelled {
+      _finishCancelled(assistantId, buffer);
     } on ApiException catch (e) {
       _patchAssistant(assistantId, buffer, streaming: false, error: e.message);
       state = state.copyWith(streaming: false, error: e.message);
     }
+  }
+
+  static const _emptyReplyFa =
+      'پاسخ دریافت نشد. اتصال قطع شد یا مدل جواب نداد. دوباره تلاش کنید.';
+
+  void _finishCancelled(String id, String buffer) {
+    if (buffer.trim().isEmpty) {
+      _patchAssistant(id, '', streaming: false, error: 'تولید متوقف شد');
+    } else {
+      _patchAssistant(id, buffer, streaming: false);
+    }
+    state = state.copyWith(streaming: false);
+  }
+
+  void _finishAssistant(String id, String buffer) {
+    final text = buffer.trim();
+    if (text.isEmpty) {
+      _patchAssistant(id, '', streaming: false, error: _emptyReplyFa);
+      state = state.copyWith(streaming: false, error: _emptyReplyFa);
+      return;
+    }
+    _patchAssistant(id, buffer, streaming: false);
+    state = state.copyWith(streaming: false);
   }
 
   void _patchAssistant(
@@ -466,6 +634,9 @@ class ChatSessionKey {
 final chatSessionProvider = StateNotifierProvider.autoDispose
     .family<ChatSessionController, ChatSessionState, ChatSessionKey>(
         (ref, key) {
+  // Keep the in-thread session alive across brief router rebuilds so a
+  // reply cannot drop the user back to empty home / history.
+  ref.keepAlive();
   return ChatSessionController(
     ref,
     key.conversationId,

@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/brand.dart';
 import 'core/deep_links.dart';
+import 'core/motion.dart';
 import 'core/providers.dart';
 import 'core/router.dart';
 import 'core/theme.dart';
+import 'shared/widgets/connectivity_banner.dart';
 
 class PigptApp extends ConsumerWidget {
   const PigptApp({super.key});
@@ -33,9 +35,15 @@ class PigptApp extends ConsumerWidget {
           GlobalCupertinoLocalizations.delegate,
         ],
         builder: (context, child) {
+          syncReduceMotion(context);
           return Directionality(
             textDirection: isFa ? TextDirection.rtl : TextDirection.ltr,
-            child: child ?? const SizedBox.shrink(),
+            child: Column(
+              children: [
+                const ConnectivityBanner(),
+                Expanded(child: child ?? const SizedBox.shrink()),
+              ],
+            ),
           );
         },
         routerConfig: router,

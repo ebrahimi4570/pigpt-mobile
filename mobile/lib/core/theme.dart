@@ -23,6 +23,38 @@ class PigptColors {
   static const lightBg = Color(0xFFF4F7FB);
   static const lightInk = Color(0xFF0F172A);
   static const lightBrand = Color(0xFF0F766E);
+  static const lightBorder = Color(0xFFE2E8F0);
+  static const lightMuted = Color(0xFF5B6B7C);
+  static const lightFaint = Color(0xFF8A97A8);
+  static const lightElevated = Color(0xFFFFFFFF);
+
+  static bool isDark(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark;
+
+  static Color surfaceOf(BuildContext context) =>
+      isDark(context) ? bgElevated : lightElevated;
+
+  static Color mutedOf(BuildContext context) =>
+      isDark(context) ? inkMuted : lightMuted;
+
+  static Color faintOf(BuildContext context) =>
+      isDark(context) ? inkFaint : lightFaint;
+
+  static Color inkOf(BuildContext context) =>
+      Theme.of(context).colorScheme.onSurface;
+
+  static Color borderOf(BuildContext context) =>
+      isDark(context) ? border : lightBorder;
+
+  static Color bubbleUser(BuildContext context) => isDark(context)
+      ? brandDeep.withValues(alpha: 0.35)
+      : const Color(0xFFD7EDEA);
+
+  static Color bubbleAssistant(BuildContext context) =>
+      isDark(context) ? bgElevated : lightElevated;
+
+  static Color codeBg(BuildContext context) =>
+      isDark(context) ? const Color(0xFF0A0F18) : const Color(0xFFF1F5F9);
 }
 
 class PigptTheme {
@@ -166,9 +198,44 @@ class PigptTheme {
         elevation: 0,
         centerTitle: true,
         titleTextStyle: GoogleFonts.vazirmatn(
-          fontSize: 18,
+          fontSize: 17,
           fontWeight: FontWeight.w700,
           color: PigptColors.lightInk,
+        ),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: Colors.white,
+        indicatorColor: PigptColors.brandSoft,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+      ),
+      drawerTheme: const DrawerThemeData(
+        backgroundColor: Color(0xFFF7F9FC),
+        surfaceTintColor: Colors.transparent,
+      ),
+      cardTheme: CardThemeData(
+        color: Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: PigptColors.lightBorder),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: Colors.white,
+        hintStyle: const TextStyle(color: PigptColors.lightFaint),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: PigptColors.lightBorder),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: PigptColors.lightBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: PigptColors.lightBrand, width: 1.4),
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
@@ -180,6 +247,25 @@ class PigptTheme {
             borderRadius: BorderRadius.circular(14),
           ),
         ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: PigptColors.lightBrand,
+          minimumSize: const Size(48, 48),
+          side: const BorderSide(color: PigptColors.lightBorder),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: const Color(0xFF1E293B),
+        contentTextStyle: GoogleFonts.vazirmatn(color: Colors.white),
+        behavior: SnackBarBehavior.floating,
+      ),
+      dividerColor: PigptColors.lightBorder,
+      progressIndicatorTheme: const ProgressIndicatorThemeData(
+        color: PigptColors.lightBrand,
       ),
     );
   }

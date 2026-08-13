@@ -9,6 +9,7 @@ import 'brand.dart';
 import 'token_store.dart';
 
 typedef UnauthorizedHandler = void Function();
+typedef ForbiddenHandler = void Function(String message);
 
 class ApiException implements Exception {
   ApiException(this.message, {this.statusCode});
@@ -19,13 +20,19 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+class StreamCancelled implements Exception {
+  const StreamCancelled();
+}
+
 class ApiClient {
   ApiClient({
     required TokenStore tokenStore,
     UnauthorizedHandler? onUnauthorized,
+    ForbiddenHandler? onForbidden,
     String? baseUrl,
   })  : _tokenStore = tokenStore,
-        _onUnauthorized = onUnauthorized {
+        _onUnauthorized = onUnauthorized,
+        _onForbidden = onForbidden {
     _dio = Dio(
       BaseOptions(
         baseUrl: '${baseUrl ?? PigptBrand.apiBase}${PigptBrand.apiPrefix}',
@@ -57,9 +64,13 @@ class ApiClient {
         },
         onError: (error, handler) async {
           final code = error.response?.statusCode;
-          if (code == 401 || code == 403) {
+          if (code == 401) {
             await _tokenStore.clear();
             _onUnauthorized?.call();
+          } else if (code == 403) {
+            final msg = _messageFrom(error.response?.data) ??
+                'این قابلیت در پلن شما فعال نیست';
+            _onForbidden?.call(msg);
           }
           handler.next(error);
         },
@@ -70,6 +81,7 @@ class ApiClient {
   late final Dio _dio;
   final TokenStore _tokenStore;
   final UnauthorizedHandler? _onUnauthorized;
+  final ForbiddenHandler? _onForbidden;
 
   Dio get raw => _dio;
 
@@ -217,29 +229,55 @@ class ApiClient {
         if (event != null) yield event;
       }
     } on DioException catch (e) {
-      if (CancelToken.isCancel(e)) return;
+      if (CancelToken.isCancel(e)) {
+        throw const StreamCancelled();
+      }
       throw _mapError(e);
     }
+  }
+
+  Future<List<int>> getBytes(String path) async {
+    try {
+      final res = await _dio.get<List<int>>(
+        path,
+        options: Options(
+          responseType: ResponseType.bytes,
+          receiveTimeout: const Duration(minutes: 2),
+        ),
+      );
+      return res.data ?? const [];
+    } on DioException catch (e) {
+      throw _mapError(e);
+    }
+  }
+
+  static String? _messageFrom(dynamic data) {
+    if (data is Map) {
+      final msg = (data['error_message_fa'] ??
+              data['message_fa'] ??
+              data['detail'] ??
+              data['message'])
+          ?.toString();
+      if (msg == null || msg.isEmpty) return null;
+      if (msg.startsWith('{') || msg.startsWith('[')) return null;
+      return msg;
+    }
+    return null;
   }
 
   ApiException _mapError(DioException e) {
     final data = e.response?.data;
     String msg = 'خطای شبکه';
-    if (data is Map) {
-      msg = (data['error_message_fa'] ??
-              data['message_fa'] ??
-              data['detail'] ??
-              data['message'] ??
-              msg)
-          .toString();
-      if (msg.startsWith('{') || msg.startsWith('[')) {
-        msg = 'خطا در ارتباط با سرور';
-      }
+    final extracted = _messageFrom(data);
+    if (extracted != null) {
+      msg = extracted;
+    } else if (e.response?.statusCode == 403) {
+      msg = 'این قابلیت در پلن شما فعال نیست';
     } else if (e.type == DioExceptionType.connectionTimeout ||
         e.type == DioExceptionType.receiveTimeout) {
-      msg = 'زمان اتصال به پایان رسید';
+      msg = 'زمان اتصال به پایان رسید. دوباره تلاش کنید.';
     } else if (e.type == DioExceptionType.connectionError) {
-      msg = 'اتصال برقرار نشد';
+      msg = 'اتصال استریم قطع شد. دوباره تلاش کنید.';
     }
     if (kDebugMode) {
       debugPrint('API error ${e.response?.statusCode}: $msg');

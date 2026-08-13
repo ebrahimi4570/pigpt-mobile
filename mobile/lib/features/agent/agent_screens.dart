@@ -10,6 +10,8 @@ import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/shimmer.dart';
+import '../../shared/widgets/app_chrome.dart';
+import '../../shared/widgets/tool_output.dart';
 import '../../shared/widgets/ui.dart';
 
 final agentMissionsProvider = FutureProvider<List<AgentMission>?>((ref) async {
@@ -77,7 +79,7 @@ class _AgentMissionsScreenState extends ConsumerState<AgentMissionsScreen> {
   Widget build(BuildContext context) {
     final async = ref.watch(agentMissionsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('ماموریت‌های ایجنت')),
+      appBar: const PigptAppBar(title: 'ماموریت‌های ایجنت', showBack: true),
       body: async.when(
         loading: () => const ListShimmer(itemCount: 5),
         error: (e, _) => EmptyState(
@@ -180,7 +182,7 @@ class _AgentMissionDetailScreenState
     extends ConsumerState<AgentMissionDetailScreen> {
   AgentMission? _mission;
   String? _error;
-  String? _toolOut;
+  dynamic _toolOut;
   bool _busy = false;
   final _fileAction = TextEditingController(text: 'list');
   final _qsPrompt = TextEditingController();
@@ -218,8 +220,8 @@ class _AgentMissionDetailScreenState
     });
     try {
       final res = await fn();
-      if (res is Map) {
-        setState(() => _toolOut = res.toString());
+      if (res != null) {
+        setState(() => _toolOut = res);
       }
       await _load();
     } on ApiException catch (e) {
@@ -236,7 +238,7 @@ class _AgentMissionDetailScreenState
   Widget build(BuildContext context) {
     final m = _mission;
     return Scaffold(
-      appBar: AppBar(title: const Text('جزئیات ماموریت')),
+      appBar: const PigptAppBar(title: 'جزئیات ماموریت', showBack: true),
       body: m == null
           ? (_error != null
               ? EmptyState(title: 'خطا', body: _error)
@@ -407,8 +409,7 @@ class _AgentMissionDetailScreenState
                         const Text('نتیجه ابزار',
                             style: TextStyle(fontWeight: FontWeight.w800)),
                         const SizedBox(height: 8),
-                        SelectableText(_toolOut!,
-                            style: const TextStyle(fontSize: 12)),
+                        ToolOutputView(data: _toolOut),
                       ],
                     ),
                   ),

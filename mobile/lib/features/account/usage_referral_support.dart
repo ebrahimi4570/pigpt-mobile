@@ -9,6 +9,7 @@ import '../../core/api_paths.dart';
 import '../../core/brand.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/app_chrome.dart';
 import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
 
@@ -70,7 +71,7 @@ class _UsageScreenState extends ConsumerState<UsageScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('مصرف')),
+      appBar: const PigptAppBar(title: 'مصرف', showBack: true),
       body: _loading
           ? const ListShimmer(itemCount: 4)
           : _error != null
@@ -285,7 +286,7 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
     final reward = d['reward_fa'] ?? d['reward'] ?? d['bonus_tokens'];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('ارجاع')),
+      appBar: const PigptAppBar(title: 'ارجاع', showBack: true),
       body: _loading
           ? const CardShimmer(height: 180)
           : _error != null
@@ -479,7 +480,7 @@ class _SupportScreenState extends ConsumerState<SupportScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('پشتیبانی')),
+      appBar: const PigptAppBar(title: 'پشتیبانی', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -633,7 +634,7 @@ class _SupportTicketDetailScreenState
         : (t['messages'] ?? t['replies'] ?? t['thread'] ?? []) as List;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('جزئیات تیکت')),
+      appBar: const PigptAppBar(title: 'جزئیات تیکت', showBack: true),
       body: t == null
           ? (_error != null
               ? EmptyState(title: 'خطا', body: _error)

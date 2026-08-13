@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/account/account_screens.dart';
+import '../features/account/invoices_screen.dart';
 import '../features/account/settings_screen.dart';
 import '../features/account/usage_referral_support.dart';
 import '../features/agent/agent_screens.dart';
@@ -53,7 +54,6 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           (loggingIn || loc == '/splash')) {
         return '/chat';
       }
-      // Never expose admin routes
       if (loc.startsWith('/admin')) return '/chat';
       return null;
     },
@@ -86,180 +86,162 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           ),
         ],
       ),
-      StatefulShellRoute.indexedStack(
-        builder: (context, state, navigationShell) =>
-            MainShell(navigationShell: navigationShell),
-        branches: [
-          StatefulShellBranch(
+      ShellRoute(
+        builder: (context, state, child) => MainShell(child: child),
+        routes: [
+          GoRoute(
+            path: '/chat',
+            builder: (_, state) {
+              final extra = state.extra;
+              final modelId = extra is String
+                  ? extra
+                  : (extra is Map ? extra['model_id']?.toString() : null);
+              return ChatThreadScreen(
+                conversationId: null,
+                initialModelId: modelId,
+                isHome: true,
+              );
+            },
             routes: [
               GoRoute(
-                path: '/chat',
+                path: 'history',
+                builder: (_, __) => const ChatListScreen(),
+              ),
+              GoRoute(
+                path: 'new',
                 builder: (_, state) {
                   final extra = state.extra;
                   final modelId = extra is String
                       ? extra
-                      : (extra is Map
-                          ? extra['model_id']?.toString()
-                          : null);
-                  // Home = new-chat composer (archive/list is secondary).
+                      : (extra is Map ? extra['model_id']?.toString() : null);
                   return ChatThreadScreen(
                     conversationId: null,
                     initialModelId: modelId,
                     isHome: true,
                   );
                 },
+              ),
+              GoRoute(
+                path: ':id',
+                builder: (_, state) => ChatThreadScreen(
+                  conversationId: state.pathParameters['id'],
+                  initialModelId: state.uri.queryParameters['model'],
+                ),
+              ),
+            ],
+          ),
+          GoRoute(
+            path: '/quick-start',
+            builder: (_, __) => const QuickStartHubScreen(),
+            routes: [
+              GoRoute(
+                path: ':cardId',
+                builder: (_, state) => QuickStartWizardScreen(
+                  cardId: state.pathParameters['cardId']!,
+                ),
+              ),
+            ],
+          ),
+          GoRoute(
+            path: '/studios',
+            builder: (_, __) => const StudiosHubScreen(),
+            routes: [
+              GoRoute(
+                path: 'gallery',
+                builder: (_, __) => const GalleryScreen(),
+              ),
+              ...StudioCatalog.allTools.map(
+                (t) => GoRoute(
+                  path: t.routeName ?? 'studio-${t.id}',
+                  builder: (_, __) {
+                    if (t.id == 'image') {
+                      return const ImageStudioScreen();
+                    }
+                    if (t.id == 'writing') {
+                      return const WritingStudioScreen();
+                    }
+                    return StudioWorkspaceScreen(
+                      toolId: t.id,
+                      title: t.label,
+                      capability: t.capability,
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+          GoRoute(
+            path: '/account',
+            builder: (_, __) => const AccountHubScreen(),
+            routes: [
+              GoRoute(
+                path: 'plans',
+                builder: (_, state) => PlansScreen(
+                  billingStatus: state.uri.queryParameters['billing'],
+                ),
+              ),
+              GoRoute(
+                path: 'invoices',
+                builder: (_, __) => const InvoicesScreen(),
+              ),
+              GoRoute(
+                path: 'usage',
+                builder: (_, __) => const UsageScreen(),
+              ),
+              GoRoute(
+                path: 'settings',
+                builder: (_, __) => const SettingsScreen(),
+              ),
+              GoRoute(
+                path: 'referral',
+                builder: (_, __) => const ReferralScreen(),
+              ),
+              GoRoute(
+                path: 'support',
+                builder: (_, __) => const SupportScreen(),
                 routes: [
-                  GoRoute(
-                    path: 'history',
-                    builder: (_, __) => const ChatListScreen(),
-                  ),
-                  GoRoute(
-                    path: 'new',
-                    builder: (_, state) {
-                      final extra = state.extra;
-                      final modelId = extra is String
-                          ? extra
-                          : (extra is Map
-                              ? extra['model_id']?.toString()
-                              : null);
-                      return ChatThreadScreen(
-                        conversationId: null,
-                        initialModelId: modelId,
-                        isHome: true,
-                      );
-                    },
-                  ),
                   GoRoute(
                     path: ':id',
-                    builder: (_, state) => ChatThreadScreen(
-                      conversationId: state.pathParameters['id'],
-                      initialModelId: state.uri.queryParameters['model'],
+                    builder: (_, state) => SupportTicketDetailScreen(
+                      id: state.pathParameters['id']!,
                     ),
                   ),
                 ],
               ),
-            ],
-          ),
-          StatefulShellBranch(
-            routes: [
               GoRoute(
-                path: '/quick-start',
-                builder: (_, __) => const QuickStartHubScreen(),
-                routes: [
-                  GoRoute(
-                    path: ':cardId',
-                    builder: (_, state) => QuickStartWizardScreen(
-                      cardId: state.pathParameters['cardId']!,
-                    ),
-                  ),
-                ],
+                path: 'picode',
+                builder: (_, __) => const PiCodeGuideScreen(),
               ),
-            ],
-          ),
-          StatefulShellBranch(
-            routes: [
               GoRoute(
-                path: '/studios',
-                builder: (_, __) => const StudiosHubScreen(),
-                routes: [
-                  GoRoute(
-                    path: 'gallery',
-                    builder: (_, __) => const GalleryScreen(),
-                  ),
-                  ...StudioCatalog.allTools.map(
-                    (t) => GoRoute(
-                      path: t.routeName ?? 'studio-${t.id}',
-                      builder: (_, __) {
-                        if (t.id == 'image') {
-                          return const ImageStudioScreen();
-                        }
-                        if (t.id == 'writing') {
-                          return const WritingStudioScreen();
-                        }
-                        return StudioWorkspaceScreen(
-                          toolId: t.id,
-                          title: t.label,
-                          capability: t.capability,
-                        );
-                      },
-                    ),
-                  ),
-                ],
+                path: 'about',
+                builder: (_, __) => const AboutScreen(),
               ),
             ],
           ),
-          StatefulShellBranch(
-            routes: [
-              GoRoute(
-                path: '/account',
-                builder: (_, __) => const AccountHubScreen(),
-                routes: [
-                  GoRoute(
-                    path: 'plans',
-                    builder: (_, state) => PlansScreen(
-                      billingStatus: state.uri.queryParameters['billing'],
-                    ),
-                  ),
-                  GoRoute(
-                    path: 'usage',
-                    builder: (_, __) => const UsageScreen(),
-                  ),
-                  GoRoute(
-                    path: 'settings',
-                    builder: (_, __) => const SettingsScreen(),
-                  ),
-                  GoRoute(
-                    path: 'referral',
-                    builder: (_, __) => const ReferralScreen(),
-                  ),
-                  GoRoute(
-                    path: 'support',
-                    builder: (_, __) => const SupportScreen(),
-                    routes: [
-                      GoRoute(
-                        path: ':id',
-                        builder: (_, state) => SupportTicketDetailScreen(
-                          id: state.pathParameters['id']!,
-                        ),
-                      ),
-                    ],
-                  ),
-                  GoRoute(
-                    path: 'picode',
-                    builder: (_, __) => const PiCodeGuideScreen(),
-                  ),
-                  GoRoute(
-                    path: 'about',
-                    builder: (_, __) => const AboutScreen(),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ],
-      ),
-      GoRoute(
-        path: '/models',
-        builder: (_, __) => const ModelsScreen(),
-      ),
-      GoRoute(
-        path: '/agent',
-        builder: (_, __) => const AgentMissionsScreen(),
-        routes: [
           GoRoute(
-            path: ':id',
-            builder: (_, state) => AgentMissionDetailScreen(
-              id: state.pathParameters['id']!,
+            path: '/models',
+            builder: (_, __) => const ModelsScreen(),
+          ),
+          GoRoute(
+            path: '/agent',
+            builder: (_, __) => const AgentMissionsScreen(),
+            routes: [
+              GoRoute(
+                path: ':id',
+                builder: (_, state) => AgentMissionDetailScreen(
+                  id: state.pathParameters['id']!,
+                ),
+              ),
+            ],
+          ),
+          GoRoute(
+            path: '/app/cli/authorize',
+            builder: (_, state) => PiCodeGuideScreen(
+              initialCode: state.uri.queryParameters['user_code'] ??
+                  state.uri.queryParameters['code'],
             ),
           ),
         ],
-      ),
-      GoRoute(
-        path: '/app/cli/authorize',
-        builder: (_, state) => PiCodeGuideScreen(
-          initialCode: state.uri.queryParameters['user_code'] ??
-              state.uri.queryParameters['code'],
-        ),
       ),
     ],
   );
@@ -267,7 +249,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
 
 class _AuthListenable extends ChangeNotifier {
   _AuthListenable(this.ref) {
-    ref.listen(authControllerProvider, (_, __) => notifyListeners());
+    ref.listen(authControllerProvider, (prev, next) {
+      if (prev?.status != next.status) notifyListeners();
+    });
   }
   final Ref ref;
 }

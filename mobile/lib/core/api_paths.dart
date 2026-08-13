@@ -56,14 +56,29 @@ class ApiPaths {
   static const billingTokenLedger = '/billing/token-ledger';
   static const billingPayments = '/billing/payments';
   static const billingPaymentsMe = '/billing/payments/me';
+  static String billingInvoicePdf(String id) =>
+      '/billing/payments/$id/invoice.pdf';
+
+  static const chatTranscribe = '/chat/transcribe';
+  static const messageDrafts = '/message-drafts';
 
   static const proRouter = '/pro/router';
   static const proQualityGate = '/pro/quality-gate';
+  static const proImageBatch = '/pro/image/batch';
+  static const proImageEdit = '/pro/image/edit';
+  static const proBrandKit = '/pro/brand-kit';
+  static const proWritingSeo = '/pro/writing/seo';
+  static const proWritingDiff = '/pro/writing/diff';
+  static const proWritingExport = '/pro/writing/export';
 
   static const studiosImagePresets = '/studios/image/presets';
   static const studiosImageGenerate = '/studios/image/generate';
+  static const studiosImageJobs = '/studios/image/jobs';
   static const studiosWritingTemplates = '/studios/writing/templates';
   static const studiosWritingRun = '/studios/writing/run';
+  static const studiosDocuments = '/studios/documents';
+  static String studiosDocument(String id) => '/studios/documents/$id';
+  static const studiosRagChat = '/studios/rag/chat';
   static const studiosMediaFlags = '/studios/media/flags';
   static const studiosMediaOcr = '/studios/media/ocr';
   static const studiosMediaTts = '/studios/media/tts';

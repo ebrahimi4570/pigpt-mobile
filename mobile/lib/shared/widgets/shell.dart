@@ -1,89 +1,31 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:go_router/go_router.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/brand.dart';
+import '../../core/motion.dart';
 import '../../core/theme.dart';
+import 'app_chrome.dart';
 import 'ui.dart';
 
-class MainShell extends StatelessWidget {
-  const MainShell({super.key, required this.navigationShell});
-  final StatefulNavigationShell navigationShell;
-
-  void _goBranch(int index) {
-    HapticFeedback.selectionClick();
-    navigationShell.goBranch(
-      index,
-      initialLocation: index == navigationShell.currentIndex,
-    );
-  }
+/// Main chrome: no bottom nav. Right-side dense drawer + page body.
+class MainShell extends ConsumerWidget {
+  const MainShell({super.key, required this.child});
+  final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    final selected = navigationShell.currentIndex;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final key = ref.watch(rootScaffoldKeyProvider);
+    final rtl = Directionality.of(context) == TextDirection.rtl;
+    final menu = const PigptDrawer();
     return Scaffold(
-      // Keep indexed-stack branch state; motion lives in destinations + nav chrome.
-      body: navigationShell,
-      bottomNavigationBar: NavigationBarTheme(
-        data: NavigationBarThemeData(
-          backgroundColor: PigptColors.bgElevated,
-          indicatorColor: PigptColors.brandSoft,
-          labelTextStyle: WidgetStateProperty.resolveWith((states) {
-            final selected = states.contains(WidgetState.selected);
-            return TextStyle(
-              fontSize: 12,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              color: selected ? PigptColors.brand : PigptColors.inkFaint,
-            );
-          }),
-          iconTheme: WidgetStateProperty.resolveWith((states) {
-            final selected = states.contains(WidgetState.selected);
-            return IconThemeData(
-              size: 24,
-              color: selected ? PigptColors.brand : PigptColors.inkMuted,
-            );
-          }),
-        ),
-        child: NavigationBar(
-          selectedIndex: selected,
-          onDestinationSelected: _goBranch,
-          backgroundColor: PigptColors.bgElevated,
-          indicatorColor: PigptColors.brandSoft,
-          surfaceTintColor: Colors.transparent,
-          shadowColor: Colors.transparent,
-          elevation: 0,
-          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-          destinations: [
-            NavigationDestination(
-              icon: Icon(Icons.chat_bubble_outline_rounded,
-                  color: PigptColors.inkMuted),
-              selectedIcon: Icon(Icons.chat_bubble_rounded,
-                  color: PigptColors.brand),
-              label: 'گفتگو',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.bolt_outlined, color: PigptColors.inkMuted),
-              selectedIcon:
-                  Icon(Icons.bolt_rounded, color: PigptColors.brand),
-              label: 'شروع سریع',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.grid_view_rounded, color: PigptColors.inkMuted),
-              selectedIcon:
-                  Icon(Icons.grid_view_rounded, color: PigptColors.brand),
-              label: 'استودیوها',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.person_outline_rounded,
-                  color: PigptColors.inkMuted),
-              selectedIcon:
-                  Icon(Icons.person_rounded, color: PigptColors.brand),
-              label: 'حساب',
-            ),
-          ],
-        ),
-      ).animate().fadeIn(duration: 300.ms).slideY(begin: 0.15, end: 0),
+      key: key,
+      // RTL start = physical right; LTR uses endDrawer so the panel stays right.
+      drawer: rtl ? menu : null,
+      endDrawer: rtl ? null : menu,
+      drawerEnableOpenDragGesture: true,
+      endDrawerEnableOpenDragGesture: true,
+      body: child,
     );
   }
 }
@@ -93,39 +35,51 @@ class SplashScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final reduce = reduceMotionOf(context);
+    Widget mark = const PigptMark(size: 88);
+    Widget title = Text(
+      PigptBrand.webDisplay,
+      style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+            fontWeight: FontWeight.w900,
+          ),
+    );
+    Widget tag = Text(
+      PigptBrand.taglineFa,
+      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: PigptColors.mutedOf(context),
+          ),
+    );
+    if (!reduce) {
+      mark = mark
+          .animate()
+          .fadeIn(duration: 500.ms)
+          .scale(begin: const Offset(0.85, 0.85))
+          .then()
+          .shimmer(duration: 1200.ms, color: PigptColors.brandSoft);
+      title = title.animate().fadeIn(delay: 120.ms).slideY(begin: 0.1, end: 0);
+      tag = tag.animate().fadeIn(delay: 200.ms);
+    }
     return Scaffold(
       body: Container(
         width: double.infinity,
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           gradient: RadialGradient(
-            center: Alignment(0, -0.3),
+            center: const Alignment(0, -0.3),
             radius: 1.1,
-            colors: [Color(0xFF14302C), PigptColors.bg],
+            colors: dark
+                ? const [Color(0xFF14302C), PigptColors.bg]
+                : const [Color(0xFFD7EDEA), PigptColors.lightBg],
           ),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const PigptMark(size: 88)
-                .animate()
-                .fadeIn(duration: 500.ms)
-                .scale(begin: const Offset(0.85, 0.85))
-                .then()
-                .shimmer(duration: 1200.ms, color: PigptColors.brandSoft),
+            mark,
             const SizedBox(height: 20),
-            Text(
-              PigptBrand.webDisplay,
-              style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
-            ).animate().fadeIn(delay: 120.ms).slideY(begin: 0.1, end: 0),
+            title,
             const SizedBox(height: 8),
-            Text(
-              PigptBrand.taglineFa,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: PigptColors.inkMuted,
-                  ),
-            ).animate().fadeIn(delay: 200.ms),
+            tag,
           ],
         ),
       ),

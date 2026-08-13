@@ -4,6 +4,8 @@ import 'package:pigpt_mobile/core/models.dart';
 import 'package:pigpt_mobile/core/starter_prompts.dart';
 import 'package:pigpt_mobile/core/studio_catalog.dart';
 import 'package:pigpt_mobile/core/api_client.dart';
+import 'package:pigpt_mobile/core/speech.dart';
+import 'package:pigpt_mobile/features/chat/chat_screens.dart';
 
 void main() {
   test('brand constants', () {
@@ -49,6 +51,24 @@ void main() {
       'attachment_ids': ['a1', 'a2'],
     });
     expect(m.attachmentIds, ['a1', 'a2']);
+  });
+
+  test('stripPoweredByFooter removes attribution lines', () {
+    final raw = 'سلام دنیا\nPiGPT · قدرت‌گرفته از gpt-4';
+    expect(stripPoweredByFooter(raw), 'سلام دنیا');
+    expect(
+      stripPoweredByFooter('پاسخ\nPiGPT قدرت گرفته از مدل gpt-4'),
+      'پاسخ',
+    );
+    expect(stripPoweredByFooter('**bold**'), '**bold**');
+  });
+
+  test('speech plainText strips markdown urls and powered-by', () {
+    expect(SpeechService.plainText('**سلام** https://x.com/a'), 'سلام');
+    expect(
+      SpeechService.plainText('متن\nPiGPT قدرت گرفته از مدل x'),
+      'متن',
+    );
   });
 
   test('SSE event parse token', () {

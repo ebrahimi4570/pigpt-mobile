@@ -2,7 +2,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api_client.dart';
@@ -11,6 +10,8 @@ import '../../core/brand.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/app_chrome.dart';
+import '../../shared/widgets/pigpt_markdown.dart';
 import '../../shared/widgets/ui.dart';
 
 /// Writing studio aligned with web `/app/writing`: templates, steps, streamed draft.
@@ -35,6 +36,8 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
   bool _busy = false;
   String? _error;
   String _output = '';
+  String? _seo;
+  String? _exportHint;
   CancelToken? _cancel;
 
   @override
@@ -157,6 +160,8 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
         setState(() => _output = buffer);
       }
       await ref.read(authControllerProvider.notifier).refreshMe();
+    } on StreamCancelled {
+      setState(() => _busy = false);
     } on ApiException catch (e) {
       // Non-stream JSON fallback if endpoint returns plain JSON.
       try {
@@ -191,6 +196,57 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
     }
   }
 
+  void _stop() {
+    _cancel?.cancel('user');
+    _cancel = null;
+    setState(() => _busy = false);
+  }
+
+  Future<void> _seoScore() async {
+    final text = _output.isNotEmpty ? _output : _previous.text.trim();
+    if (text.isEmpty) return;
+    try {
+      final data = await ref.read(apiClientProvider).post<Map<String, dynamic>>(
+        ApiPaths.proWritingSeo,
+        data: {
+          'title': _topic.text.trim(),
+          'text': text,
+        },
+        parser: (d) => Map<String, dynamic>.from(d as Map),
+      );
+      setState(() => _seo = '${data['score'] ?? data['seo'] ?? data}');
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    }
+  }
+
+  Future<void> _export() async {
+    final text = _output.isNotEmpty ? _output : _previous.text.trim();
+    if (text.isEmpty) return;
+    try {
+      final data = await ref.read(apiClientProvider).post<Map<String, dynamic>>(
+        ApiPaths.proWritingExport,
+        data: {
+          'title': _topic.text.trim().isEmpty ? 'خروجی نوشتار' : _topic.text.trim(),
+          'text': text,
+        },
+        parser: (d) => Map<String, dynamic>.from(d as Map),
+      );
+      final md = data['markdown'];
+      final html = data['html'];
+      final mdUrl = md is Map ? md['url'] : data['markdown_url'];
+      final htmlUrl = html is Map ? html['url'] : data['html_url'];
+      setState(() {
+        _exportHint = [
+          if (mdUrl != null) 'Markdown: $mdUrl',
+          if (htmlUrl != null) 'HTML: $htmlUrl',
+        ].join('\n');
+      });
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final current = _current;
@@ -205,7 +261,7 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('استودیوی نوشتن')),
+      appBar: const PigptAppBar(title: 'استودیوی نوشتن', showBack: true),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
@@ -313,6 +369,14 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
                             ? 'در حال نوشتن…'
                             : 'اجرای مرحله «$stepLabel»'),
                       ),
+                      if (_busy) ...[
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: _stop,
+                          icon: const Icon(Icons.stop_rounded),
+                          label: const Text('توقف استریم'),
+                        ),
+                      ],
                     ],
                   ),
                 ).animate().fadeIn(),
@@ -350,18 +414,38 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
                         if (_output.isEmpty && _busy)
                           const Text(PigptBrand.loadingWriting)
                         else
-                          MarkdownBody(
-                            data: _output,
-                            selectable: true,
-                            styleSheet:
-                                MarkdownStyleSheet.fromTheme(Theme.of(context))
-                                    .copyWith(
-                              p: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(height: 1.6),
-                            ),
+                          PigptMarkdown(data: _output),
+                        if (_output.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              OutlinedButton(
+                                onPressed: _seoScore,
+                                child: const Text('امتیاز SEO'),
+                              ),
+                              OutlinedButton(
+                                onPressed: _export,
+                                child: const Text('خروجی Markdown/HTML'),
+                              ),
+                            ],
                           ),
+                        ],
+                        if (_seo != null) ...[
+                          const SizedBox(height: 8),
+                          Text('SEO: $_seo',
+                              style: TextStyle(
+                                  color: PigptColors.mutedOf(context),
+                                  fontSize: 12)),
+                        ],
+                        if (_exportHint != null) ...[
+                          const SizedBox(height: 8),
+                          SelectableText(
+                            _exportHint!,
+                            textDirection: TextDirection.ltr,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ],
                         const SizedBox(height: 8),
                         const Text(
                           PigptBrand.readyWith,

@@ -10,12 +10,17 @@ final tokenStoreProvider = Provider<TokenStore>((ref) => TokenStore());
 
 final authRefreshProvider = StateProvider<int>((ref) => 0);
 
+final planLockedMessageProvider = StateProvider<String?>((ref) => null);
+
 final apiClientProvider = Provider<ApiClient>((ref) {
   final store = ref.watch(tokenStoreProvider);
   return ApiClient(
     tokenStore: store,
     onUnauthorized: () {
       ref.read(authRefreshProvider.notifier).state++;
+    },
+    onForbidden: (msg) {
+      ref.read(planLockedMessageProvider.notifier).state = msg;
     },
   );
 });
@@ -27,6 +32,9 @@ final localeProvider = StateProvider<Locale>((ref) => const Locale('fa'));
 
 /// Whether TTS output is enabled (from settings.speech.voice_output).
 final speechOutputEnabledProvider = StateProvider<bool>((ref) => true);
+
+/// Whether composer mic / STT is enabled (from settings.speech.voice_input).
+final speechInputEnabledProvider = StateProvider<bool>((ref) => false);
 
 enum AuthStatus { unknown, signedOut, signedIn, needsVerification }
 
@@ -79,10 +87,47 @@ class AuthController extends StateNotifier<AuthState> {
       } else {
         state = AuthState(status: AuthStatus.signedIn, user: me);
       }
+      await _hydrateSettings();
+    } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        await _store.clear();
+        state = const AuthState(status: AuthStatus.signedOut);
+      } else {
+        // 403 = plan/permission — keep token. Network/5xx: keep token too.
+        state = AuthState(status: AuthStatus.signedIn, error: e.message);
+      }
     } catch (_) {
-      await _store.clear();
-      state = const AuthState(status: AuthStatus.signedOut);
+      state = const AuthState(status: AuthStatus.signedIn);
     }
+  }
+
+  Future<void> _hydrateSettings() async {
+    try {
+      final settingsRes = await _api.get<Map<String, dynamic>>(
+        ApiPaths.meSettings,
+        parser: (d) => Map<String, dynamic>.from(d as Map),
+      );
+      final settings = settingsRes['settings'] is Map
+          ? Map<String, dynamic>.from(settingsRes['settings'] as Map)
+          : settingsRes;
+      final theme = settings['theme']?.toString();
+      if (theme == 'light') {
+        _ref.read(themeModeProvider.notifier).state = ThemeMode.light;
+      } else if (theme == 'system') {
+        _ref.read(themeModeProvider.notifier).state = ThemeMode.system;
+      } else {
+        _ref.read(themeModeProvider.notifier).state = ThemeMode.dark;
+      }
+      final loc = settings['ui_locale']?.toString() == 'en' ? 'en' : 'fa';
+      _ref.read(localeProvider.notifier).state = Locale(loc);
+      final speech = settings['speech'];
+      if (speech is Map) {
+        _ref.read(speechOutputEnabledProvider.notifier).state =
+            speech['voice_output'] != false;
+        _ref.read(speechInputEnabledProvider.notifier).state =
+            speech['voice_input'] == true;
+      }
+    } catch (_) {}
   }
 
   Future<void> refreshMe() async {

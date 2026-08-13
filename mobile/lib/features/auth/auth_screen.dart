@@ -87,16 +87,21 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 
   Future<void> _googleLogin() async {
-    final uri = Uri.parse(googleOAuthStartUrl());
-    // Prefer Custom Tabs / SFSafariViewController so the OAuth return
-    // (`pigpt://auth/callback`) lands back in-app; fall back to external browser.
+    // Device QA note: Google Cloud must allow pigpt://auth/callback and
+    // https://pigpt.ir/app/auth/callback. Cannot fully verify on this host.
+    final uri = Uri.parse(googleOAuthStartUrl(next: PigptBrand.oauthCallback));
     try {
-      final ok = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+      var ok = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
       if (!ok) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
       }
-    } catch (_) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        setState(() => _error = 'باز کردن ورود گوگل ناموفق بود');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = 'ورود گوگل در این دستگاه در دسترس نیست');
+      }
     }
   }
 

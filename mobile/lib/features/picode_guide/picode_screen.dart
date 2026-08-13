@@ -7,6 +7,7 @@ import '../../core/api_paths.dart';
 import '../../core/brand.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/app_chrome.dart';
 import '../../shared/widgets/ui.dart';
 
 /// PiCode guide / install only — no embedded CLI runtime.
@@ -60,7 +61,7 @@ class _PiCodeGuideScreenState extends ConsumerState<PiCodeGuideScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('راهنمای ${PigptBrand.cliDisplay}')),
+      appBar: PigptAppBar(title: 'راهنمای ${PigptBrand.cliDisplay}', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

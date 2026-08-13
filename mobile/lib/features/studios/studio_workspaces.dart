@@ -1,7 +1,9 @@
+import 'dart:async';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -10,6 +12,9 @@ import '../../core/api_paths.dart';
 import '../../core/brand.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/app_chrome.dart';
+import '../../shared/widgets/audio_player_card.dart';
+import '../../shared/widgets/pigpt_markdown.dart';
 import '../../shared/widgets/ui.dart';
 
 /// Maps studio catalog id → specialized workspace (not generic textarea).
@@ -104,7 +109,11 @@ class _ResultCard extends StatelessWidget {
               ),
             ],
           ),
-          if (url != null && url!.isNotEmpty) ...[
+          if (url != null && url!.isNotEmpty && looksLikeAudioUrl(url))
+            AudioPlayerCard(
+              url: url!.startsWith('http') ? url! : '${PigptBrand.apiBase}$url',
+            )
+          else if (url != null && url!.isNotEmpty) ...[
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
               child: Image.network(
@@ -116,8 +125,9 @@ class _ResultCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-          ],
-          MarkdownBody(data: text, selectable: true),
+            PigptMarkdown(data: text),
+          ] else
+            PigptMarkdown(data: text),
           const SizedBox(height: 8),
           const Text(PigptBrand.readyWith,
               style: TextStyle(color: PigptColors.inkFaint, fontSize: 12)),
@@ -148,7 +158,7 @@ class _MediaStudioScreenState extends ConsumerState<MediaStudioScreen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 4, vsync: this);
+    _tabs = TabController(length: 5, vsync: this);
     _loadFlags();
   }
 
@@ -196,12 +206,36 @@ class _MediaStudioScreenState extends ConsumerState<MediaStudioScreen>
   }
 
   Future<void> _pickAndOcr() async {
-    final file = await ImagePicker().pickImage(source: ImageSource.gallery);
-    if (file == null) return;
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp', 'pdf'],
+    );
+    final f = picked?.files.single;
+    if (f?.path == null) {
+      final img = await ImagePicker().pickImage(source: ImageSource.gallery);
+      if (img == null) return;
+      await _run(() => ref.read(apiClientProvider).postMultipart(
+            ApiPaths.studiosMediaOcr,
+            filePath: img.path,
+            filename: img.name,
+          ));
+      return;
+    }
     await _run(() => ref.read(apiClientProvider).postMultipart(
           ApiPaths.studiosMediaOcr,
-          filePath: file.path,
-          filename: file.name,
+          filePath: f!.path!,
+          filename: f.name,
+        ));
+  }
+
+  Future<void> _pickAndStt() async {
+    final picked = await FilePicker.platform.pickFiles(type: FileType.audio);
+    final f = picked?.files.single;
+    if (f?.path == null) return;
+    await _run(() => ref.read(apiClientProvider).postMultipart(
+          ApiPaths.studiosMediaStt,
+          filePath: f!.path!,
+          filename: f.name,
         ));
   }
 
@@ -209,13 +243,27 @@ class _MediaStudioScreenState extends ConsumerState<MediaStudioScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false,
+        leading: IconButton(
+          tooltip: 'منو',
+          onPressed: () => openPigptMenu(context, ref),
+          icon: const Icon(Icons.menu_rounded),
+        ),
         title: const Text('استودیوی رسانه'),
+        actions: [
+          IconButton(
+            tooltip: 'بازگشت',
+            onPressed: () => Navigator.of(context).maybePop(),
+            icon: const Icon(Icons.arrow_forward_rounded),
+          ),
+        ],
         bottom: TabBar(
           controller: _tabs,
           isScrollable: true,
           tabs: const [
             Tab(text: 'OCR'),
             Tab(text: 'TTS'),
+            Tab(text: 'STT'),
             Tab(text: 'ویرایش تصویر'),
             Tab(text: 'وضعیت'),
           ],
@@ -277,6 +325,26 @@ class _MediaStudioScreenState extends ConsumerState<MediaStudioScreen>
                                           Map<String, dynamic>.from(d as Map),
                                     )),
                             child: const Text('تولید صدا'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    SoftCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text(
+                              'فایل صوتی را انتخاب کنید یا با میکروفون ضبط کنید.'),
+                          const SizedBox(height: 12),
+                          FilledButton.icon(
+                            onPressed: _busy ? null : _pickAndStt,
+                            icon: const Icon(Icons.upload_file_outlined),
+                            label: const Text('آپلود و تبدیل گفتار'),
                           ),
                         ],
                       ),
@@ -433,7 +501,7 @@ class _CodingStudioScreenState extends ConsumerState<CodingStudioScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('کدنویسی')),
+      appBar: const PigptAppBar(title: 'کدنویسی', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -553,7 +621,7 @@ class _AnalyticsStudioScreenState extends ConsumerState<AnalyticsStudioScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('داده و گزارش')),
+      appBar: const PigptAppBar(title: 'داده و گزارش', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -653,7 +721,7 @@ class _EduStudioScreenState extends ConsumerState<EduStudioScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('آموزش')),
+      appBar: const PigptAppBar(title: 'آموزش', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -790,7 +858,7 @@ class _AlgorithmsStudioScreenState extends ConsumerState<AlgorithmsStudioScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('الگوریتم‌ها')),
+      appBar: const PigptAppBar(title: 'الگوریتم‌ها', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -916,7 +984,7 @@ class _BizStudioScreenState extends ConsumerState<BizStudioScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('کسب‌وکار ایران')),
+      appBar: const PigptAppBar(title: 'کسب‌وکار ایران', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1064,7 +1132,7 @@ class _AssistantStudioScreenState extends ConsumerState<AssistantStudioScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('دستیار پروژه‌ای')),
+      appBar: const PigptAppBar(title: 'دستیار پروژه‌ای', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1202,7 +1270,7 @@ class _GrowthStudioScreenState extends ConsumerState<GrowthStudioScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('ایمنی و رشد')),
+      appBar: const PigptAppBar(title: 'ایمنی و رشد', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1323,7 +1391,7 @@ class _WorkspaceStudioScreenState extends ConsumerState<WorkspaceStudioScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('فضای کاری سازمان')),
+      appBar: const PigptAppBar(title: 'فضای کاری سازمان', showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1384,30 +1452,68 @@ class DocumentsStudioScreen extends ConsumerStatefulWidget {
 
 class _DocumentsStudioScreenState extends ConsumerState<DocumentsStudioScreen> {
   final _question = TextEditingController();
-  String? _uploadId;
-  String? _fileName;
+  List<Map<String, dynamic>> _docs = const [];
+  final _selected = <String>{};
   String? _out;
   String? _error;
   bool _busy = false;
+  Timer? _poll;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
 
   @override
   void dispose() {
+    _poll?.cancel();
     _question.dispose();
     super.dispose();
   }
 
+  Future<void> _load() async {
+    try {
+      final data =
+          await ref.read(apiClientProvider).get<dynamic>(ApiPaths.studiosDocuments);
+      final list = data is List
+          ? data
+          : (data is Map ? (data['documents'] ?? data['items'] ?? []) as List : []);
+      final docs = list
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      if (!mounted) return;
+      setState(() => _docs = docs);
+      final pending = docs.any((d) {
+        final s = '${d['status']}';
+        return s == 'pending' || s == 'processing' || s == 'queued';
+      });
+      _poll?.cancel();
+      if (pending) {
+        _poll = Timer(const Duration(seconds: 3), _load);
+      }
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    }
+  }
+
   Future<void> _pick() async {
-    final file = await ImagePicker().pickImage(source: ImageSource.gallery);
-    if (file == null) return;
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'txt', 'md', 'csv'],
+    );
+    final f = picked?.files.single;
+    if (f?.path == null) return;
     setState(() => _busy = true);
     try {
-      final up = await ref
-          .read(apiClientProvider)
-          .uploadFile(file.path, filename: file.name);
-      setState(() {
-        _uploadId = '${up['id']}';
-        _fileName = file.name;
-      });
+      await ref.read(apiClientProvider).postMultipart(
+            ApiPaths.studiosDocuments,
+            filePath: f!.path!,
+            filename: f.name,
+            fields: {'title': f.name},
+          );
+      await _load();
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } finally {
@@ -1423,18 +1529,36 @@ class _DocumentsStudioScreenState extends ConsumerState<DocumentsStudioScreen> {
       _error = null;
       _out = null;
     });
+    final api = ref.read(apiClientProvider);
+    var buffer = '';
     try {
-      final data = await ref.read(apiClientProvider).post<Map<String, dynamic>>(
-        ApiPaths.proQualityGate,
+      await for (final event in api.postSse(
+        ApiPaths.studiosRagChat,
         data: {
-          'content': q,
-          'studio': 'documents',
-          if (_uploadId != null) 'upload_id': _uploadId,
-          'question': q,
+          'message': q,
+          if (_selected.isNotEmpty) 'document_ids': _selected.toList(),
         },
-        parser: (d) => Map<String, dynamic>.from(d as Map),
-      );
-      setState(() => _out = _extractText(data));
+      )) {
+        if (event.event == 'token') {
+          buffer += '${event.data['text'] ?? ''}';
+          setState(() => _out = buffer);
+        } else if (event.event == 'error') {
+          setState(() => _error =
+              '${event.data['error_message_fa'] ?? event.data['message_fa'] ?? event.data['detail'] ?? 'خطا'}');
+          break;
+        }
+      }
+      if (buffer.isEmpty && _out == null) {
+        final data = await api.post<Map<String, dynamic>>(
+          ApiPaths.studiosRagChat,
+          data: {
+            'message': q,
+            if (_selected.isNotEmpty) 'document_ids': _selected.toList(),
+          },
+          parser: (d) => Map<String, dynamic>.from(d as Map),
+        );
+        setState(() => _out = _extractText(data));
+      }
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } finally {
@@ -1445,7 +1569,7 @@ class _DocumentsStudioScreenState extends ConsumerState<DocumentsStudioScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: PigptAppBar(title: widget.title, showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1455,20 +1579,58 @@ class _DocumentsStudioScreenState extends ConsumerState<DocumentsStudioScreen> {
               children: [
                 const SectionHeader(
                   title: 'اسناد و دانش',
-                  subtitle: 'آپلود تصویر/سند و پرسش با دروازه کیفیت',
+                  subtitle: 'PDF / TXT / MD / CSV — ایندکس و پرسش با استناد',
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: _busy ? null : _pick,
                   icon: const Icon(Icons.upload_file_outlined),
-                  label: Text(_fileName ?? 'آپلود فایل'),
+                  label: const Text('آپلود سند'),
                 ),
+                const SizedBox(height: 8),
+                if (_docs.isEmpty)
+                  Text('سندی نیست — ابتدا فایل آپلود کنید.',
+                      style: TextStyle(
+                          color: PigptColors.mutedOf(context), fontSize: 12))
+                else
+                  ..._docs.map((d) {
+                    final id = '${d['id'] ?? ''}';
+                    final st = '${d['status'] ?? ''}';
+                    final ready = st == 'ready';
+                    return CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      value: _selected.contains(id),
+                      onChanged: ready
+                          ? (v) => setState(() {
+                                if (v == true) {
+                                  _selected.add(id);
+                                } else {
+                                  _selected.remove(id);
+                                }
+                              })
+                          : null,
+                      title: Text('${d['title'] ?? d['filename'] ?? id}',
+                          style: const TextStyle(fontSize: 13)),
+                      subtitle: Text(
+                        st == 'ready'
+                            ? 'آماده'
+                            : (st == 'pending' || st == 'processing'
+                                ? 'در حال ایندکس…'
+                                : st),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: PigptColors.mutedOf(context),
+                        ),
+                      ),
+                    );
+                  }),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _question,
                   minLines: 3,
                   maxLines: 6,
-                  decoration: const InputDecoration(labelText: 'سؤال'),
+                  decoration: const InputDecoration(labelText: 'سؤال از اسناد'),
                 ),
                 const SizedBox(height: 12),
                 FilledButton(
@@ -1543,7 +1705,7 @@ class _AutomationStudioScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: PigptAppBar(title: widget.title, showBack: true),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -1598,7 +1760,7 @@ class StudioFallbackScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: PigptAppBar(title: title, showBack: true),
       body: EmptyState(
         title: title,
         body: 'استودیوی «$toolId» هنوز API اختصاصی ندارد.',

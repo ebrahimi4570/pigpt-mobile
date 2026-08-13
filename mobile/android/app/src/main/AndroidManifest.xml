@@ -1,7 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <application
         android:label="PiGPT"
         android:name="${applicationName}"
@@ -66,6 +71,7 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="https" android:host="pigpt.ir" android:pathPrefix="/app/c"/>
                 <data android:scheme="https" android:host="pigpt.ir" android:pathPrefix="/app/cli"/>
+                <data android:scheme="https" android:host="pigpt.ir" android:pathPrefix="/app/quick-start"/>
                 <data android:scheme="https" android:host="pigpt.ir" android:pathPrefix="/auth/verify"/>
                 <data android:scheme="https" android:host="pigpt.ir" android:pathPrefix="/share"/>
                 <data android:scheme="https" android:host="pigpt.ir" android:path="/app"/>
@@ -93,6 +99,9 @@
         </intent>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
         </intent>
     </queries>
 </manifest>

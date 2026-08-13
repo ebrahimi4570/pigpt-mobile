@@ -10,6 +10,8 @@ import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/studio_catalog.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/app_chrome.dart';
+import '../../shared/widgets/fullscreen_image.dart';
 import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
 import 'studio_workspaces.dart';
@@ -62,7 +64,7 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
     text: 'می‌خواهم یک گزارش CSV را تحلیل کنم',
   );
   String? _suggestionTitle;
-  String? _suggestionHref;
+  String? _suggestionRoute;
   bool _busy = false;
 
   @override
@@ -82,9 +84,10 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
       );
       final s = data['suggestion'];
       if (s is Map) {
+        final href = s['href']?.toString() ?? s['route']?.toString();
         setState(() {
-          _suggestionTitle = s['title']?.toString();
-          _suggestionHref = s['href']?.toString();
+          _suggestionTitle = s['title']?.toString() ?? s['title_fa']?.toString();
+          _suggestionRoute = _routeFromHref(href);
         });
       }
     } on ApiException catch (e) {
@@ -95,6 +98,39 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  String? _routeFromHref(String? href) {
+    if (href == null || href.isEmpty) return null;
+    if (href.contains('quick-start')) return '/quick-start';
+    if (href.contains('/app/image') || href.endsWith('/image')) {
+      return '/studios/studio-image';
+    }
+    if (href.contains('/app/writing') || href.endsWith('/writing')) {
+      return '/studios/studio-writing';
+    }
+    if (href.contains('/app/documents')) return '/studios/studio-documents';
+    if (href.contains('/app/media')) return '/studios/studio-media';
+    if (href.contains('/app/studios')) return '/studios';
+    if (href.contains('/app/gallery')) return '/studios/gallery';
+    for (final t in StudioCatalog.allTools) {
+      final h = t.href;
+      if (href == h || href.startsWith('$h/')) {
+        return '/studios/${t.routeName ?? 'studio-${t.id}'}';
+      }
+    }
+    return null;
+  }
+
+  void _openSuggestion() {
+    final route = _suggestionRoute;
+    if (route == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_suggestionTitle ?? 'مسیر پیشنهاد مشخص نیست')),
+      );
+      return;
+    }
+    context.push(route);
   }
 
   void _openTool(StudioToolDef tool, {required bool enabled}) {
@@ -113,16 +149,7 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
     final caps = ref.watch(capabilitiesProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('استودیوها'),
-        actions: [
-          IconButton(
-            tooltip: 'گالری',
-            onPressed: () => context.push('/studios/gallery'),
-            icon: const Icon(Icons.photo_library_outlined),
-          ),
-        ],
-      ),
+      appBar: const PigptAppBar(title: 'استودیوها'),
       body: caps.when(
         loading: () => const ListShimmer(itemCount: 5),
         error: (e, _) => EmptyState(title: 'خطا', body: '$e'),
@@ -148,7 +175,7 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
               .toList();
 
           return ListView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
             children: [
               SoftCard(
                 child: Column(
@@ -168,22 +195,21 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
                     ),
                     if (_suggestionTitle != null) ...[
                       const SizedBox(height: 10),
-                      Text('پیشنهاد: $_suggestionTitle'),
-                      if (_suggestionHref != null)
-                        Text(_suggestionHref!,
-                            textDirection: TextDirection.ltr,
-                            style: const TextStyle(
-                                color: PigptColors.inkFaint, fontSize: 12)),
+                      FilledButton.tonalIcon(
+                        onPressed: _openSuggestion,
+                        icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                        label: Text('ورود به ${_suggestionTitle!}'),
+                      ),
                     ],
                   ],
                 ),
               ).animate().fadeIn(),
-              const SizedBox(height: 18),
+              const SizedBox(height: 10),
               const SectionHeader(
                 title: 'ابزارهای اصلی',
                 subtitle: 'تصویر، نوشتن و رسانه',
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 6),
               ...primary.asMap().entries.map((e) {
                 final t = e.value;
                 final on = isOn(t.capability);
@@ -193,9 +219,9 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
                   onTap: () => _openTool(t, enabled: on),
                 ).animate(delay: (40 * e.key).ms).fadeIn().slideY(begin: 0.05, end: 0);
               }),
-              const SizedBox(height: 18),
-              const SectionHeader(title: 'بیشتر'),
               const SizedBox(height: 10),
+              const SectionHeader(title: 'بیشتر'),
+              const SizedBox(height: 6),
               ...more.map((t) {
                 final on = isOn(t.capability);
                 return _StudioTile(
@@ -225,7 +251,7 @@ class _StudioTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SoftCard(
-      margin: const EdgeInsets.only(bottom: 8),
+      dense: true,
       onTap: onTap,
       child: Row(
         children: [
@@ -245,10 +271,11 @@ class _StudioTile extends StatelessWidget {
                     ],
                   ],
                 ),
-                const SizedBox(height: 4),
                 Text(tool.blurb,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        color: PigptColors.inkMuted, fontSize: 13)),
+                        color: PigptColors.inkMuted, fontSize: 12)),
               ],
             ),
           ),
@@ -343,7 +370,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('گالری خروجی')),
+      appBar: const PigptAppBar(title: 'گالری خروجی', showBack: true),
       body: _loading
           ? const GridShimmer()
           : _error != null
@@ -380,33 +407,25 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
                           return SoftCard(
                             padding: EdgeInsets.zero,
                             onTap: () {
-                              showDialog(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  title: Text(title),
-                                  content: SingleChildScrollView(
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        if (url != null)
-                                          Image.network(url,
-                                              errorBuilder: (_, __, ___) =>
-                                                  const SizedBox.shrink()),
-                                        if (previewText.isNotEmpty) ...[
-                                          const SizedBox(height: 8),
-                                          Text(previewText),
-                                        ],
-                                      ],
+                              if (url != null) {
+                                showFullscreenImage(context, url: url);
+                              } else if (previewText.isNotEmpty) {
+                                showDialog(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: Text(title),
+                                    content: SingleChildScrollView(
+                                      child: Text(previewText),
                                     ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(ctx),
+                                        child: const Text('بستن'),
+                                      ),
+                                    ],
                                   ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(ctx),
-                                      child: const Text('بستن'),
-                                    ),
-                                  ],
-                                ),
-                              );
+                                );
+                              }
                             },
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -33,23 +33,30 @@ class SoftCard extends StatelessWidget {
     this.onTap,
     this.padding = const EdgeInsets.all(16),
     this.margin,
+    this.dense = false,
   });
 
   final Widget child;
   final VoidCallback? onTap;
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry? margin;
+  final bool dense;
 
   @override
   Widget build(BuildContext context) {
+    final pad = dense
+        ? const EdgeInsets.symmetric(horizontal: 12, vertical: 8)
+        : padding;
+    final mar = margin ?? (dense ? const EdgeInsets.only(bottom: 4) : null);
     final card = Container(
-      margin: margin,
-      padding: padding,
+      margin: mar,
+      padding: pad,
+      constraints: dense ? const BoxConstraints(minHeight: 44) : null,
       decoration: BoxDecoration(
         color: Theme.of(context).brightness == Brightness.dark
             ? PigptColors.bgElevated
             : Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(dense ? 12 : 16),
         border: Border.all(
           color: Theme.of(context).brightness == Brightness.dark
               ? PigptColors.border
@@ -286,9 +293,9 @@ class LtrCodeBlock extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF0A0F18),
+        color: PigptColors.codeBg(context),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: PigptColors.border),
+        border: Border.all(color: PigptColors.borderOf(context)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -298,11 +305,11 @@ class LtrCodeBlock extends StatelessWidget {
               textDirection: TextDirection.ltr,
               child: SelectableText(
                 code,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 12,
                   height: 1.5,
-                  color: PigptColors.ink,
+                  color: PigptColors.inkOf(context),
                 ),
               ),
             ),

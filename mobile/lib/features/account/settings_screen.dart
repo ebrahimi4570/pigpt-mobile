@@ -10,6 +10,7 @@ import '../../core/api_paths.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import '../../shared/widgets/app_chrome.dart';
 import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
 import '../chat/chat_providers.dart';
@@ -143,6 +144,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (speech is Map) {
       ref.read(speechOutputEnabledProvider.notifier).state =
           speech['voice_output'] != false;
+      ref.read(speechInputEnabledProvider.notifier).state =
+          speech['voice_input'] == true;
     }
   }
 
@@ -254,7 +257,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('تنظیمات')),
+      appBar: const PigptAppBar(title: 'تنظیمات', showBack: true),
       body: _loading
           ? const ListShimmer(itemCount: 5, itemHeight: 96)
           : ListView(
@@ -480,13 +483,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       const SectionHeader(
                         title: 'گفتار',
                         subtitle:
-                            'ورودی صوتی به پکیج میکروفون نیاز دارد؛ خروجی با TTS موجود است',
+                            'میکروفون گفتگو را به متن تبدیل می‌کند (fa-IR / Whisper)',
                       ),
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
-                        title: const Text('ورودی صوتی (ترجیح)'),
+                        title: const Text('ورودی صوتی'),
                         subtitle: const Text(
-                            'ذخیره می‌شود؛ ضبط میکروفون در این نسخه محدود است'),
+                            'دکمهٔ میکروفون در کادر گفتگو — بدون ارسال خودکار'),
                         value: _speech['voice_input'] == true,
                         onChanged: (v) {
                           setState(() {
