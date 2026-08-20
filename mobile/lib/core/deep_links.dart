@@ -44,7 +44,8 @@ class _DeepLinkBootstrapState extends ConsumerState<DeepLinkBootstrap> {
     // 1) OAuth access token (or error= from Google)
     final oauthErr = _extractOAuthError(uri);
     if (oauthErr != null) {
-      ref.read(authControllerProvider.notifier);
+      ref.read(oauthErrorProvider.notifier).state = oauthErr;
+      ref.read(goRouterProvider).go('/auth');
       return;
     }
     final token = _extractAccessToken(uri);

@@ -5,6 +5,7 @@ import 'package:pigpt_mobile/core/starter_prompts.dart';
 import 'package:pigpt_mobile/core/studio_catalog.dart';
 import 'package:pigpt_mobile/core/api_client.dart';
 import 'package:pigpt_mobile/core/speech.dart';
+import 'package:pigpt_mobile/core/live_status.dart';
 import 'package:pigpt_mobile/features/chat/chat_screens.dart';
 
 void main() {
@@ -43,6 +44,23 @@ void main() {
     expect(me.balance, 10);
   });
 
+  test('UserMe prefers spendable_today and daily_unlimited', () {
+    final me = UserMe.fromJson({
+      'id': '1',
+      'email': 'a@b.com',
+      'wallet': {
+        'balance': 458152,
+        'spendable_today': 458152,
+        'daily_tokens_remaining': 458152,
+        'daily_unlimited': true,
+      },
+    });
+    expect(me.balance, 458152);
+    expect(me.spendableToday, 458152);
+    expect(me.dailyTokensRemaining, 458152);
+    expect(me.dailyUnlimited, isTrue);
+  });
+
   test('ChatMessage parses attachment_ids', () {
     final m = ChatMessage.fromJson({
       'id': 'm1',
@@ -76,5 +94,22 @@ void main() {
     expect(e, isNotNull);
     expect(e!.event, 'token');
     expect(e.data['text'], 'سلام');
+  });
+
+  test('live status in-progress labels use در حال + مصدر', () {
+    expect(const LiveStatus(phase: LivePhase.thinking).label, 'در حال فکر کردن');
+    expect(const LiveStatus(phase: LivePhase.writing).label, 'در حال نوشتن');
+    expect(const LiveStatus(phase: LivePhase.searching).label, 'در حال جستجو');
+    expect(const LiveStatus(phase: LivePhase.listening).label, 'در حال گوش دادن');
+    expect(
+      const LiveStatus(phase: LivePhase.transcribing).label,
+      'در حال تبدیل به متن',
+    );
+    expect(const LiveStatus(phase: LivePhase.waiting).label, 'در انتظار پاسخ');
+    expect(const LiveStatus(phase: LivePhase.imaging).label, 'در حال ساخت تصویر');
+    expect(const LiveStatus(phase: LivePhase.uploading).label, 'در حال آپلود');
+    expect(const LiveStatus(phase: LivePhase.ready).label, 'آماده');
+    expect(const LiveStatus(phase: LivePhase.ready).isActive, isFalse);
+    expect(const LiveStatus(phase: LivePhase.thinking).isActive, isTrue);
   });
 }

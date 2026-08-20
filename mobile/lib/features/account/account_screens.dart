@@ -60,19 +60,22 @@ class AccountHubScreen extends ConsumerWidget {
             canGenerate: me?.canGenerate ?? true,
             balance: me?.balance,
             dailyRemaining:
-                me?.dailyTokensRemaining ?? me?.freeDailyRemaining,
-            dailyCap: me?.freeDailyCap,
+                me?.spendableToday ?? me?.dailyTokensRemaining,
+            dailyUnlimited: me?.dailyUnlimited ?? false,
             onTopUp: () => context.push('/account/plans'),
           ),
           const SizedBox(height: 16),
           _tile(context, Icons.credit_card_rounded, 'پلن و کیف‌توکن',
               '/account/plans'),
+          _tile(context, Icons.account_balance_outlined, 'پرداخت‌های کارت‌به‌کارت',
+              '/account/offline-payments'),
           _tile(context, Icons.receipt_long_outlined, 'فاکتورها',
               '/account/invoices'),
           _tile(context, Icons.bar_chart_rounded, 'مصرف', '/account/usage'),
-          _tile(context, Icons.tune_rounded, 'تنظیمات و مدل‌های من',
+          _tile(context, Icons.tune_rounded, 'تنظیمات',
               '/account/settings'),
-          _tile(context, Icons.card_giftcard_rounded, 'ارجاع',
+          _tile(context, Icons.auto_awesome_rounded, 'مدل‌ها', '/models'),
+          _tile(context, Icons.card_giftcard_rounded, 'دعوت دوستان',
               '/account/referral'),
           _tile(context, Icons.support_agent_rounded, 'پشتیبانی',
               '/account/support'),
@@ -126,8 +129,8 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
   BillingWallet? _wallet;
   String? _error;
   bool _loading = true;
-  String? _gateway;
-  String? _busyId;
+  bool _offlineEnabled = false;
+  String? _offlineHint;
 
   @override
   void initState() {
@@ -155,7 +158,30 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
     List<BillingPlan> plans = const [];
     List<TokenPackage> packages = const [];
     BillingWallet? wallet;
-    String? gateway;
+    var offlineEnabled = false;
+    String? offlineHint;
+
+    try {
+      final off = await api.get<Map<String, dynamic>>(
+        ApiPaths.billingOfflineSettings,
+        parser: (d) => Map<String, dynamic>.from(d as Map),
+      );
+      final cards = off['cards'];
+      final hasCards = (cards is List && cards.isNotEmpty) ||
+          '${off['card_number'] ?? ''}'.trim().isNotEmpty;
+      offlineEnabled = off['is_enabled'] == true ||
+          off['enabled'] == true ||
+          off['configured'] == true ||
+          hasCards;
+      if (!offlineEnabled) {
+        offlineHint =
+            '${off['message_fa'] ?? off['hint_fa'] ?? 'پرداخت کارت‌به‌کارت فعلاً فعال نیست.'}';
+      }
+    } on ApiException catch (e) {
+      // Still offer the offline flow — the pay screen shows the real status.
+      offlineEnabled = true;
+      offlineHint = e.message;
+    }
 
     try {
       final data = await api.get<Map<String, dynamic>>(
@@ -164,7 +190,6 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
       );
       final list = (data['plans'] ?? data['items'] ?? []) as List;
       final current = data['current_plan_id']?.toString();
-      gateway = data['gateway']?.toString();
       plans = list.whereType<Map>().map((e) {
         final p = BillingPlan.fromJson(Map<String, dynamic>.from(e));
         return BillingPlan(
@@ -208,7 +233,8 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
 
     if (!mounted) return;
     setState(() {
-      _gateway = gateway;
+      _offlineEnabled = offlineEnabled;
+      _offlineHint = offlineHint;
       _plans = plans;
       _packages = packages;
       _wallet = wallet;
@@ -228,40 +254,13 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
       n.round().toString().replaceAllMapped(
           RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
 
-  Future<void> _openPayment(Map<String, dynamic> body, String busyId) async {
-    if (_gateway == 'inactive') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('درگاه پرداخت غیرفعال است — با پشتیبانی تماس بگیرید')),
-      );
-      return;
-    }
-    setState(() => _busyId = busyId);
-    try {
-      final api = ref.read(apiClientProvider);
-      final data = await api.post<Map<String, dynamic>>(
-        ApiPaths.billingPayments,
-        data: body,
-        parser: (d) => Map<String, dynamic>.from(d as Map),
-      );
-      final url = '${data['redirect_url'] ?? data['url'] ?? ''}';
-      if (url.isNotEmpty) {
-        final uri = Uri.parse(url);
-        final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-        if (!ok && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('باز کردن درگاه پرداخت ناموفق بود')),
-          );
-        }
-      }
-    } on ApiException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
-      }
-    } finally {
-      if (mounted) setState(() => _busyId = null);
-    }
+  void _startOffline({String? planId, String? packageId}) {
+    final q = <String, String>{
+      if (planId != null && planId.isNotEmpty) 'plan_id': planId,
+      if (packageId != null && packageId.isNotEmpty) 'package_id': packageId,
+    };
+    final uri = Uri(path: '/account/offline-pay', queryParameters: q);
+    context.push(uri.toString());
   }
 
   @override
@@ -269,10 +268,11 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
     final me = ref.watch(meProvider);
     final wallet = _wallet;
     final balance = wallet?.balance ?? me?.balance;
-    final dailyRemaining = wallet?.freeDailyRemaining ??
-        me?.dailyTokensRemaining ??
-        me?.freeDailyRemaining;
-    final dailyCap = wallet?.freeDailyCap ?? me?.freeDailyCap;
+    final dailyRemaining = wallet?.spendableToday ??
+        me?.spendableToday ??
+        me?.dailyTokensRemaining;
+    final dailyUnlimited =
+        wallet?.dailyUnlimited == true || me?.dailyUnlimited == true;
     final canGenerate = wallet?.canGenerate ?? me?.canGenerate ?? true;
 
     return Scaffold(
@@ -289,7 +289,7 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         const Text(
-                          'موجودی فعلی',
+                          'موجودی کیف',
                           style: TextStyle(
                             color: PigptColors.inkMuted,
                             fontSize: 13,
@@ -308,9 +308,9 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'رایگان باقیمانده: ${_fmtNum(wallet?.freeRemaining ?? me?.freeRemaining ?? 0)}'
-                          ' · سقف امروز: ${dailyRemaining != null ? _fmtNum(dailyRemaining) : '—'}'
-                          '${dailyCap != null ? ' / ${_fmtNum(dailyCap)}' : ''}'
+                          dailyUnlimited
+                              ? 'بدون سقف روزانه'
+                              : 'باقیمانده امروز: ${dailyRemaining != null ? _fmtNum(dailyRemaining) : '—'}'
                           '${!canGenerate ? ' — برای ادامه شارژ لازم است' : ''}',
                           style: const TextStyle(
                             color: PigptColors.inkMuted,
@@ -336,15 +336,62 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  SoftCard(
+                    onTap: () => context.push('/account/plans-compare'),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.compare_arrows_rounded,
+                            color: PigptColors.brand),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'مقایسه پلن‌ها',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        Icon(Icons.chevron_left_rounded,
+                            color: PigptColors.inkFaint),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SoftCard(
+                    onTap: () => context.push('/account/offline-payments'),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.receipt_long_outlined,
+                            color: PigptColors.brand),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'پرداخت‌های کارت‌به‌کارت',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        Icon(Icons.chevron_left_rounded,
+                            color: PigptColors.inkFaint),
+                      ],
+                    ),
+                  ),
                   if (_error != null) ...[
                     const SizedBox(height: 12),
                     Text(_error!,
                         style: const TextStyle(color: PigptColors.danger)),
                   ],
+                  if (!_offlineEnabled && _offlineHint != null) ...[
+                    const SizedBox(height: 12),
+                    SoftCard(
+                      child: Text(
+                        _offlineHint!,
+                        style: const TextStyle(color: PigptColors.inkMuted),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   const SectionHeader(
                     title: 'شارژ توکن اضافه',
-                    subtitle: 'بسته‌های توکن — پرداخت در مرورگر / درگاه',
+                    subtitle: 'بسته‌های توکن — واریز کارت‌به‌کارت',
                   ),
                   const SizedBox(height: 10),
                   if (_packages.isEmpty)
@@ -387,15 +434,8 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                                     color: PigptColors.inkMuted)),
                             const SizedBox(height: 10),
                             FilledButton(
-                              onPressed: _busyId != null
-                                  ? null
-                                  : () => _openPayment(
-                                        {'token_package_id': p.id},
-                                        'pkg-${p.id}',
-                                      ),
-                              child: Text(_busyId == 'pkg-${p.id}'
-                                  ? '…'
-                                  : 'خرید بسته'),
+                              onPressed: () => _startOffline(packageId: p.id),
+                              child: const Text('پرداخت کارت‌به‌کارت'),
                             ),
                           ],
                         ),
@@ -445,21 +485,19 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                           ],
                           const SizedBox(height: 10),
                           if (p.current)
-                            OutlinedButton(
+                            const OutlinedButton(
                               onPressed: null,
-                              child: const Text('پلن فعلی'),
+                              child: Text('پلن فعلی'),
+                            )
+                          else if ((p.priceRial ?? p.price ?? 0) <= 0)
+                            const OutlinedButton(
+                              onPressed: null,
+                              child: Text('رایگان'),
                             )
                           else
                             FilledButton(
-                              onPressed: _busyId != null
-                                  ? null
-                                  : () => _openPayment(
-                                        {'plan_id': p.id},
-                                        'plan-${p.id}',
-                                      ),
-                              child: Text(_busyId == 'plan-${p.id}'
-                                  ? '…'
-                                  : 'خرید / ارتقا'),
+                              onPressed: () => _startOffline(planId: p.id),
+                              child: const Text('پرداخت کارت‌به‌کارت'),
                             ),
                         ],
                       ),
@@ -468,6 +506,154 @@ class _PlansScreenState extends ConsumerState<PlansScreen> {
                 ],
               ),
             ),
+    );
+  }
+}
+
+class PlansCompareScreen extends ConsumerStatefulWidget {
+  const PlansCompareScreen({super.key});
+
+  @override
+  ConsumerState<PlansCompareScreen> createState() => _PlansCompareScreenState();
+}
+
+class _PlansCompareScreenState extends ConsumerState<PlansCompareScreen> {
+  List<Map<String, dynamic>> _plans = const [];
+  List<Map<String, dynamic>> _features = const [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final data = await ref.read(apiClientProvider).get<Map<String, dynamic>>(
+            ApiPaths.billingPlansCompare,
+            parser: (d) => Map<String, dynamic>.from(d as Map),
+          );
+      final plans = (data['plans'] ?? []) as List;
+      final feats = (data['features_matrix'] ?? data['features'] ?? []) as List;
+      if (!mounted) return;
+      setState(() {
+        _plans = plans
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        _features = feats
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        _loading = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    }
+  }
+
+  String _cell(Map<String, dynamic> plan, String key) {
+    final v = plan[key] ??
+        (plan['limits'] is Map ? (plan['limits'] as Map)[key] : null) ??
+        (plan['features'] is Map ? (plan['features'] as Map)[key] : null);
+    if (v == null) return '—';
+    if (v is bool) return v ? '✓' : '—';
+    if (v is num) {
+      return v
+          .round()
+          .toString()
+          .replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
+    }
+    return '$v';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: const PigptAppBar(title: 'مقایسه پلن‌ها', showBack: true),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? EmptyState(
+                  title: 'مقایسه',
+                  body: _error,
+                  action: FilledButton(
+                      onPressed: _load, child: const Text('تلاش دوباره')),
+                )
+              : ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    const SectionHeader(
+                      title: 'پلن‌ها در یک نگاه',
+                      subtitle: 'تفاوت سقف و ابزارها',
+                    ),
+                    const SizedBox(height: 12),
+                    ..._plans.map((p) {
+                      final name =
+                          '${p['name_fa'] ?? p['name'] ?? p['code'] ?? 'پلن'}';
+                      return SoftCard(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(name,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w800)),
+                            const SizedBox(height: 8),
+                            if (_features.isEmpty)
+                              Text(
+                                'توکن: ${_cell(p, 'platform_tokens_granted')}',
+                                style: const TextStyle(
+                                    color: PigptColors.inkMuted),
+                              )
+                            else
+                              ..._features.map((f) {
+                                final key = '${f['key'] ?? ''}';
+                                final label =
+                                    '${f['label_fa'] ?? f['label'] ?? key}';
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 4),
+                                  child: Row(
+                                    children: [
+                                      Expanded(child: Text(label)),
+                                      Text(
+                                        _cell(p, key),
+                                        style: const TextStyle(
+                                            fontWeight: FontWeight.w700),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            const SizedBox(height: 8),
+                            FilledButton(
+                              onPressed: () {
+                                final id = '${p['id'] ?? ''}';
+                                if (id.isEmpty) {
+                                  context.push('/account/plans');
+                                } else {
+                                  context.push(
+                                      '/account/offline-pay?plan_id=$id');
+                                }
+                              },
+                              child: const Text('پرداخت کارت‌به‌کارت'),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ),
     );
   }
 }

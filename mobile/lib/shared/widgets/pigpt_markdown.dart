@@ -6,9 +6,15 @@ import 'package:markdown/markdown.dart' as md;
 import '../../core/theme.dart';
 
 class PigptMarkdown extends StatelessWidget {
-  const PigptMarkdown({super.key, required this.data, this.streaming = false});
+  const PigptMarkdown({
+    super.key,
+    required this.data,
+    this.streaming = false,
+    this.codeBlocks = true,
+  });
   final String data;
   final bool streaming;
+  final bool codeBlocks;
 
   @override
   Widget build(BuildContext context) {
@@ -19,7 +25,7 @@ class PigptMarkdown extends StatelessWidget {
       selectable: true,
       shrinkWrap: true,
       extensionSet: md.ExtensionSet.gitHubFlavored,
-      builders: {'pre': _CodeBlockBuilder()},
+      builders: codeBlocks ? {'pre': _CodeBlockBuilder()} : const {},
       styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
         p: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.55),
         strong: Theme.of(context)

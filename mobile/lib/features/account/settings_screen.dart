@@ -1,12 +1,14 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
+import '../../core/brand.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
@@ -17,7 +19,8 @@ import '../chat/chat_providers.dart';
 
 /// Full settings aligned with web SettingsModal (mobile-supported APIs).
 class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, this.asHub = false});
+  final bool asHub;
 
   @override
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
@@ -25,9 +28,6 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Map<String, dynamic> _settings = {};
-  List<AiModel> _models = const [];
-  Set<String> _enabledModels = {};
-  String? _defaultModel;
   List<Map<String, dynamic>> _tones = const [];
   bool _loading = true;
   String? _msg;
@@ -72,6 +72,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return {'voice_input': false, 'voice_output': true};
   }
 
+  Map<String, String> get _traits {
+    final raw = _settings['traits'];
+    const keys = ['warmth', 'enthusiasm', 'headers_lists', 'emoji'];
+    final out = <String, String>{};
+    for (final k in keys) {
+      final v = raw is Map ? raw[k]?.toString() : null;
+      out[k] = (v == 'less' || v == 'more') ? v! : 'default';
+    }
+    return out;
+  }
+
+  String get _baseStyle {
+    final v = _settings['base_style']?.toString();
+    if (v != null && v.isNotEmpty) return v;
+    final t = _settings['tone']?.toString();
+    if (t != null && t.isNotEmpty) return t;
+    return 'default';
+  }
+
   Future<void> _load() async {
     final api = ref.read(apiClientProvider);
     final me = ref.read(meProvider);
@@ -90,25 +109,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               .map((e) => Map<String, dynamic>.from(e))
               .toList()
           : <Map<String, dynamic>>[];
-      final prefs = await api.get<Map<String, dynamic>>(
-        ApiPaths.meModelPrefs,
-        parser: (d) => Map<String, dynamic>.from(d as Map),
-      );
-      final models = await ref.read(modelsProvider.future);
-      final enabled = <String>{};
-      final rawEnabled = prefs['enabled_model_ids'] ?? prefs['models'];
-      if (rawEnabled is List) {
-        enabled.addAll(rawEnabled.map((e) => e.toString()));
-      }
       final custom = settings['custom_instructions'];
       if (!mounted) return;
       setState(() {
         _settings = settings;
         _tones = tones;
-        _models = models;
-        _enabledModels = enabled;
-        _defaultModel = prefs['default_model_id']?.toString() ??
-            settings['default_model_id']?.toString();
         _displayName.text = me?.displayName ?? '';
         _phone.text = me?.phone ?? '';
         _nickname.text = '${settings['nickname'] ?? ''}';
@@ -147,6 +152,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.read(speechInputEnabledProvider.notifier).state =
           speech['voice_input'] == true;
     }
+    ref.read(showCodeBlocksProvider.notifier).state =
+        settings['show_code_blocks'] != false;
   }
 
   Future<void> _saveSettings({String ok = 'ذخیره شد'}) async {
@@ -156,6 +163,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       'about_user': _aboutUser.text.trim(),
       'how_to_respond': _howRespond.text.trim(),
     };
+    final style = '${_settings['base_style'] ?? _settings['tone'] ?? 'default'}';
+    _settings['base_style'] = style;
+    _settings['tone'] = style;
     try {
       await ref.read(apiClientProvider).patch(
             ApiPaths.meSettings,
@@ -179,21 +189,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       );
       await ref.read(authControllerProvider.notifier).refreshMe();
       setState(() => _msg = 'پروفایل به‌روز شد');
-    } on ApiException catch (e) {
-      setState(() => _msg = e.message);
-    }
-  }
-
-  Future<void> _saveModels() async {
-    try {
-      await ref.read(apiClientProvider).put(
-        ApiPaths.meModelPrefs,
-        data: {
-          'enabled_model_ids': _enabledModels.toList(),
-          'default_model_id': _defaultModel,
-        },
-      );
-      setState(() => _msg = 'مدل‌ها ذخیره شد');
     } on ApiException catch (e) {
       setState(() => _msg = e.message);
     }
@@ -254,10 +249,187 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<void> _deleteAllChats() async {
+    await _confirmDanger(
+      'حذف همه گفتگوها؟',
+      'همه گفتگوها برای همیشه حذف می‌شوند.',
+      () async {
+        await ref.read(apiClientProvider).delete(ApiPaths.conversations);
+        ref.invalidate(conversationsProvider(false));
+        ref.invalidate(conversationsProvider(true));
+        setState(() => _msg = 'همه گفتگوها حذف شد');
+      },
+    );
+  }
+
+  Future<void> _deleteAccount() async {
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('حذف کامل حساب'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('برای تأیید، DELETE را تایپ کنید.'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              textDirection: TextDirection.ltr,
+              decoration: const InputDecoration(hintText: 'DELETE'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('انصراف')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('حذف')),
+        ],
+      ),
+    );
+    if (ok != true || ctrl.text.trim() != 'DELETE') return;
+    try {
+      await ref.read(apiClientProvider).delete(
+            ApiPaths.me,
+            data: {'confirm': 'DELETE'},
+          );
+      await ref.read(authControllerProvider.notifier).logout();
+      if (mounted) context.go('/auth');
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _msg = e.message);
+    }
+  }
+
+  List<Widget> _traitTiles() {
+    const meta = [
+      ('warmth', 'گرما', 'رسمی‌تر', 'صمیمی‌تر'),
+      ('enthusiasm', 'اشتیاق', 'آرام‌تر', 'پرانرژی‌تر'),
+      ('headers_lists', 'عنوان و فهرست', 'پاراگراف', 'ساختارمند'),
+      ('emoji', 'ایموجی', 'بدون ایموجی', 'با ایموجی'),
+    ];
+    final locked = _settings['personalization_enabled'] == false;
+    final traits = Map<String, dynamic>.from(_settings['traits'] is Map
+        ? Map<String, dynamic>.from(_settings['traits'] as Map)
+        : _traits);
+    return [
+      for (final t in meta) ...[
+        DropdownButtonFormField<String>(
+          value: _traits[t.$1],
+          decoration: InputDecoration(
+            labelText: t.$2,
+            helperText: '${t.$3} · پیش‌فرض · ${t.$4}',
+          ),
+          items: [
+            DropdownMenuItem(value: 'less', child: Text(t.$3)),
+            const DropdownMenuItem(value: 'default', child: Text('پیش‌فرض')),
+            DropdownMenuItem(value: 'more', child: Text(t.$4)),
+          ],
+          onChanged: locked
+              ? null
+              : (v) => setState(() {
+                    traits[t.$1] = v ?? 'default';
+                    _settings['traits'] = traits;
+                  }),
+        ),
+        const SizedBox(height: 8),
+      ],
+    ];
+  }
+
+  Widget _hubHeader(BuildContext context) {
+    final me = ref.watch(meProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SoftCard(
+          child: Row(
+            children: [
+              const PigptMark(size: 48),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      me?.greetingName ?? 'کاربر',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    if (me?.email != null)
+                      Text(
+                        me!.email,
+                        textDirection: TextDirection.ltr,
+                        style: const TextStyle(color: PigptColors.inkMuted),
+                      ),
+                    if (me?.planName != null)
+                      Text('پلن: ${me!.planName}',
+                          style: const TextStyle(fontSize: 12)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        WalletBanner(
+          canGenerate: me?.canGenerate ?? true,
+          balance: me?.balance,
+          dailyRemaining: me?.spendableToday ?? me?.dailyTokensRemaining,
+          dailyUnlimited: me?.dailyUnlimited ?? false,
+          onTopUp: () => context.push('/account/plans'),
+        ),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  Widget _accountLinks(BuildContext context) {
+    Widget tile(IconData icon, String title, String path) {
+      return SoftCard(
+        margin: const EdgeInsets.only(bottom: 8),
+        onTap: () => context.push(path),
+        child: Row(
+          children: [
+            Icon(icon, color: PigptColors.brand),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Text(title,
+                    style: const TextStyle(fontWeight: FontWeight.w700))),
+            const Icon(Icons.chevron_left_rounded, color: PigptColors.inkFaint),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SectionHeader(title: 'حساب'),
+        const SizedBox(height: 8),
+        tile(Icons.credit_card_rounded, 'پلن و کیف‌توکن', '/account/plans'),
+        tile(Icons.receipt_long_outlined, 'فاکتورها', '/account/invoices'),
+        tile(Icons.bar_chart_rounded, 'مصرف', '/account/usage'),
+        tile(Icons.card_giftcard_rounded, 'ارجاع', '/account/referral'),
+        tile(Icons.support_agent_rounded, 'پشتیبانی', '/account/support'),
+        tile(Icons.terminal_rounded, 'راهنمای PiCode', '/account/picode'),
+        tile(Icons.info_outline_rounded, 'درباره PiGPT', '/account/about'),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: const PigptAppBar(title: 'تنظیمات', showBack: true),
+      appBar: PigptAppBar(
+        title: widget.asHub ? 'حساب و تنظیمات' : 'تنظیمات',
+        showBack: !widget.asHub,
+      ),
       body: _loading
           ? const ListShimmer(itemCount: 5, itemHeight: 96)
           : ListView(
@@ -270,6 +442,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const SizedBox(height: 12),
                 ],
+                if (widget.asHub) _hubHeader(context),
                 SoftCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -329,36 +502,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         onChanged: (v) =>
                             setState(() => _settings['ui_locale'] = v),
                       ),
-                      const SizedBox(height: 12),
-                      if (_tones.isNotEmpty)
-                        DropdownButtonFormField<String>(
-                          value: _tones.any((t) =>
-                                  '${t['id']}' == '${_settings['tone']}')
-                              ? '${_settings['tone']}'
-                              : null,
-                          decoration: const InputDecoration(labelText: 'لحن'),
-                          items: _tones
-                              .map((t) => DropdownMenuItem(
-                                    value: '${t['id']}',
-                                    child: Text(
-                                        '${t['label_fa'] ?? t['id']}'),
-                                  ))
-                              .toList(),
-                          onChanged: (v) =>
-                              setState(() => _settings['tone'] = v),
-                        )
-                      else
-                        TextFormField(
-                          initialValue: '${_settings['tone'] ?? ''}',
-                          decoration: const InputDecoration(labelText: 'لحن'),
-                          onChanged: (v) => _settings['tone'] = v,
-                        ),
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         title: const Text('ارسال با Enter'),
                         value: _settings['enter_to_send'] == true,
                         onChanged: (v) =>
                             setState(() => _settings['enter_to_send'] = v),
+                      ),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('قالب‌بندی بلوک کد'),
+                        subtitle: const Text(
+                            'قالب‌بندی خواناتر برای قطعات کد در پاسخ‌ها'),
+                        value: _settings['show_code_blocks'] != false,
+                        onChanged: (v) => setState(
+                            () => _settings['show_code_blocks'] = v),
                       ),
                       const SizedBox(height: 8),
                       FilledButton(
@@ -377,6 +535,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         subtitle: 'لقب، شغل و دستورهای سفارشی',
                       ),
                       const SizedBox(height: 8),
+                      if (_settings['personalization_enabled'] == false) ...[
+                        SoftCard(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const Text(
+                                'شخصی‌سازی برای پلن شما محدود است یا خاموش شده.',
+                                style: TextStyle(fontSize: 13),
+                              ),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: () =>
+                                      context.push('/account/plans'),
+                                  child: const Text('مشاهده پلن‌ها'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         title: const Text('شخصی‌سازی فعال'),
@@ -384,6 +565,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         onChanged: (v) => setState(
                             () => _settings['personalization_enabled'] = v),
                       ),
+                      DropdownButtonFormField<String>(
+                        value: () {
+                          final ids = _tones.isNotEmpty
+                              ? _tones.map((t) => '${t['id']}').toList()
+                              : const [
+                                  'default',
+                                  'professional',
+                                  'friendly',
+                                  'candid',
+                                  'quirky',
+                                  'efficient',
+                                  'cynical',
+                                ];
+                          return ids.contains(_baseStyle) ? _baseStyle : null;
+                        }(),
+                        decoration: const InputDecoration(
+                            labelText: 'سبک و لحن پایه'),
+                        items: (_tones.isNotEmpty
+                                ? _tones
+                                : const [
+                                    {'id': 'default', 'label_fa': 'پیش‌فرض'},
+                                    {
+                                      'id': 'professional',
+                                      'label_fa': 'حرفه‌ای'
+                                    },
+                                    {'id': 'friendly', 'label_fa': 'دوستانه'},
+                                    {'id': 'candid', 'label_fa': 'صریح'},
+                                    {'id': 'quirky', 'label_fa': 'بامزه'},
+                                    {'id': 'efficient', 'label_fa': 'کارآمد'},
+                                    {'id': 'cynical', 'label_fa': 'طعنه‌آمیز'},
+                                  ])
+                            .map((t) => DropdownMenuItem(
+                                  value: '${t['id']}',
+                                  child: Text('${t['label_fa'] ?? t['id']}'),
+                                ))
+                            .toList(),
+                        onChanged: (_settings['personalization_enabled'] ==
+                                false)
+                            ? null
+                            : (v) => setState(() {
+                                  _settings['base_style'] = v;
+                                  _settings['tone'] = v;
+                                }),
+                      ),
+                      const SizedBox(height: 8),
+                      ..._traitTiles(),
                       TextField(
                         controller: _nickname,
                         decoration: const InputDecoration(labelText: 'لقب'),
@@ -522,51 +749,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
                 const SizedBox(height: 12),
                 SoftCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                  onTap: () => context.push('/models'),
+                  child: const Row(
                     children: [
-                      const SectionHeader(
-                        title: 'مدل‌های من',
-                        subtitle: 'حداقل یک مدل باید فعال باشد',
+                      Icon(Icons.auto_awesome_rounded, color: PigptColors.brand),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('مدل‌ها',
+                                style: TextStyle(fontWeight: FontWeight.w800)),
+                            SizedBox(height: 4),
+                            Text(
+                              'انتخاب و مدیریت مدل‌های فعال',
+                              style: TextStyle(
+                                  color: PigptColors.inkMuted, fontSize: 12),
+                            ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(height: 8),
-                      ..._models.map((m) {
-                        final on = _enabledModels.contains(m.id);
-                        return CheckboxListTile(
-                          value: on,
-                          title: Text(m.name),
-                          controlAffinity: ListTileControlAffinity.leading,
-                          contentPadding: EdgeInsets.zero,
-                          onChanged: (v) {
-                            setState(() {
-                              if (v == true) {
-                                _enabledModels.add(m.id);
-                              } else {
-                                _enabledModels.remove(m.id);
-                              }
-                            });
-                          },
-                        );
-                      }),
-                      DropdownButtonFormField<String>(
-                        value: _defaultModel != null &&
-                                _models.any((m) => m.id == _defaultModel)
-                            ? _defaultModel
-                            : null,
-                        decoration:
-                            const InputDecoration(labelText: 'مدل پیش‌فرض'),
-                        items: _models
-                            .map((m) => DropdownMenuItem(
-                                  value: m.id,
-                                  child: Text(m.name),
-                                ))
-                            .toList(),
-                        onChanged: (v) => setState(() => _defaultModel = v),
-                      ),
-                      const SizedBox(height: 12),
-                      FilledButton(
-                          onPressed: _saveModels,
-                          child: const Text('ذخیره مدل‌ها')),
+                      Icon(Icons.chevron_left_rounded,
+                          color: PigptColors.inkFaint),
                     ],
                   ),
                 ),
@@ -574,12 +778,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 SoftCard(
                   child: Column(
                     children: [
+                      const SectionHeader(title: 'داده و حریم خصوصی'),
                       ListTile(
+                        contentPadding: EdgeInsets.zero,
                         leading: const Icon(Icons.download_outlined),
-                        title: const Text('خروجی داده (Export)'),
+                        title: const Text('خروجی داده'),
+                        subtitle: const Text('پروفایل و گفتگوها'),
                         onTap: _export,
                       ),
                       ListTile(
+                        contentPadding: EdgeInsets.zero,
                         leading: const Icon(Icons.archive_outlined),
                         title: const Text('بایگانی همه گفتگوها'),
                         onTap: () => _confirmDanger(
@@ -596,6 +804,50 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ),
                       ),
                       ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.delete_forever_outlined,
+                            color: PigptColors.danger),
+                        title: const Text('حذف همه گفتگوها'),
+                        onTap: _deleteAllChats,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SoftCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SectionHeader(title: 'امنیت'),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('ایمیل حساب'),
+                        subtitle: Text(
+                          ref.watch(meProvider)?.email ?? '—',
+                          textDirection: TextDirection.ltr,
+                        ),
+                      ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('موبایل'),
+                        subtitle: Text(
+                          ref.watch(meProvider)?.phone ?? '—',
+                          textDirection: TextDirection.ltr,
+                        ),
+                      ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.logout_rounded),
+                        title: const Text('خروج از این دستگاه'),
+                        onTap: () async {
+                          await ref
+                              .read(authControllerProvider.notifier)
+                              .logout();
+                          if (context.mounted) context.go('/auth');
+                        },
+                      ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
                         leading: const Icon(Icons.logout_rounded),
                         title: const Text('خروج از همه دستگاه‌ها'),
                         onTap: () => _confirmDanger(
@@ -612,11 +864,206 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           },
                         ),
                       ),
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.person_off_outlined,
+                            color: PigptColors.danger),
+                        title: const Text('حذف کامل حساب'),
+                        onTap: _deleteAccount,
+                      ),
                     ],
                   ),
                 ),
+                const SizedBox(height: 12),
+                const _ApiKeyCard(),
+                const SizedBox(height: 12),
+                _accountLinks(context),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    await ref.read(authControllerProvider.notifier).logout();
+                    if (context.mounted) context.go('/auth');
+                  },
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('خروج'),
+                ),
               ],
             ),
+    );
+  }
+}
+
+class _ApiKeyCard extends ConsumerStatefulWidget {
+  const _ApiKeyCard();
+
+  @override
+  ConsumerState<_ApiKeyCard> createState() => _ApiKeyCardState();
+}
+
+class _ApiKeyCardState extends ConsumerState<_ApiKeyCard> {
+  List<Map<String, dynamic>> _items = const [];
+  String? _token;
+  String? _msg;
+  bool _loading = true;
+  bool _hidden = false;
+  bool _busy = false;
+  bool _reveal = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final data = await ref.read(apiClientProvider).get<Map<String, dynamic>>(
+            ApiPaths.meApiKeys,
+            parser: (d) => Map<String, dynamic>.from(d as Map),
+          );
+      final list = (data['items'] ?? data['keys'] ?? []) as List;
+      if (!mounted) return;
+      setState(() {
+        _items = list
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+        _loading = false;
+        _hidden = false;
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _hidden = e.statusCode == 404 || e.statusCode == 410;
+        _msg = _hidden ? null : e.message;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _create() async {
+    setState(() => _busy = true);
+    try {
+      final data = await ref.read(apiClientProvider).post<Map<String, dynamic>>(
+            ApiPaths.meApiKeys,
+            data: {'name': 'افزونه وردپرس'},
+            parser: (d) => Map<String, dynamic>.from(d as Map),
+          );
+      if (!mounted) return;
+      setState(() {
+        _token = data['token']?.toString();
+        _msg = data['message_fa']?.toString() ??
+            'کلید ساخته شد — فقط همین یک‌بار قابل مشاهده است.';
+        _reveal = false;
+        _busy = false;
+      });
+      await _load();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _msg = e.message;
+        _busy = false;
+      });
+    }
+  }
+
+  Future<void> _revoke(String id) async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(apiClientProvider).delete(ApiPaths.meApiKey(id));
+      if (_token != null) setState(() => _token = null);
+      await _load();
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _msg = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _copy(String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) setState(() => _msg = 'کپی شد');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hidden) return const SizedBox.shrink();
+    if (_loading) {
+      return const SoftCard(child: Text('بارگذاری کلید اتصال…'));
+    }
+    return SoftCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SectionHeader(
+            title: 'کلید اتصال',
+            subtitle: 'برای افزونه وردپرس PiGPT — آدرس پایه https://pigpt.ir',
+          ),
+          if (_msg != null) ...[
+            const SizedBox(height: 8),
+            Text(_msg!, style: const TextStyle(color: PigptColors.brand)),
+          ],
+          if (_token != null) ...[
+            const SizedBox(height: 8),
+            SelectableText(
+              _reveal ? _token! : '••••••••••••',
+              textDirection: TextDirection.ltr,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
+            Row(
+              children: [
+                IconButton(
+                  tooltip: _reveal ? 'مخفی' : 'نمایش',
+                  onPressed: () => setState(() => _reveal = !_reveal),
+                  icon: Icon(_reveal
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined),
+                ),
+                TextButton.icon(
+                  onPressed: () => _copy(_token!),
+                  icon: const Icon(Icons.copy_rounded, size: 16),
+                  label: const Text('کپی کلید'),
+                ),
+              ],
+            ),
+          ],
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () => _copy(PigptBrand.webUrl),
+              child: const Text('کپی آدرس پایه'),
+            ),
+          ),
+          FilledButton(
+            onPressed: _busy ? null : _create,
+            child: const Text('ساخت کلید جدید'),
+          ),
+          if (_items.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text('کلید فعالی نیست.',
+                  style: TextStyle(color: PigptColors.inkMuted)),
+            )
+          else
+            ..._items.map((k) {
+              final id = '${k['id'] ?? ''}';
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text('${k['name'] ?? 'کلید'} · ${k['prefix'] ?? ''}'),
+                subtitle: Text(
+                  k['created_at']?.toString() ?? '',
+                  textDirection: TextDirection.ltr,
+                  style: const TextStyle(fontSize: 11),
+                ),
+                trailing: IconButton(
+                  tooltip: 'باطل کردن',
+                  onPressed: _busy || id.isEmpty ? null : () => _revoke(id),
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              );
+            }),
+        ],
+      ),
     );
   }
 }

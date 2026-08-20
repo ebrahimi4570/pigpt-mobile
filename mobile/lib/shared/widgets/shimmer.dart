@@ -39,6 +39,61 @@ class ListShimmer extends StatelessWidget {
   }
 }
 
+class ChatThreadShimmer extends StatelessWidget {
+  const ChatThreadShimmer({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final base = dark ? const Color(0xFF1A2436) : const Color(0xFFE8EEF5);
+    final highlight = dark ? const Color(0xFF243044) : const Color(0xFFF5F8FC);
+    return Shimmer.fromColors(
+      baseColor: base,
+      highlightColor: highlight,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              height: 64,
+              width: 220,
+              decoration: BoxDecoration(
+                color: PigptColors.bgElevated,
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              height: 96,
+              width: 280,
+              decoration: BoxDecoration(
+                color: PigptColors.bgElevated,
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              height: 48,
+              width: 160,
+              decoration: BoxDecoration(
+                color: PigptColors.bgElevated,
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class CardShimmer extends StatelessWidget {
   const CardShimmer({super.key, this.height = 120});
   final double height;

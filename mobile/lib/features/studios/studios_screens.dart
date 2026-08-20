@@ -16,7 +16,7 @@ import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
 import 'studio_workspaces.dart';
 
-/// Capabilities enabled for the current user/plan. Missing API → treat primary studios as enabled.
+/// Capabilities enabled for the current user/plan. API failure → empty (locked), never fake-enable.
 final capabilitiesProvider = FutureProvider<Set<String>>((ref) async {
   final api = ref.watch(apiClientProvider);
   try {
@@ -42,13 +42,7 @@ final capabilitiesProvider = FutureProvider<Set<String>>((ref) async {
     }
     return set;
   } on ApiException {
-    // Fallback: enable primary consumer studios; secondary show as soon.
-    return {
-      'image_studio',
-      'writing_studio',
-      'media_studio',
-      'document_rag',
-    };
+    return <String>{};
   }
 });
 
@@ -135,9 +129,8 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
 
   void _openTool(StudioToolDef tool, {required bool enabled}) {
     if (!enabled) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('این استودیو به‌زودی فعال می‌شود')),
-      );
+      ref.read(planLockedMessageProvider.notifier).state =
+          'این ابزار در پلن شما فعال نیست. برای دسترسی، پلن را ارتقا دهید.';
       return;
     }
     final route = tool.routeName ?? 'studio-${tool.id}';
@@ -156,14 +149,6 @@ class _StudiosHubScreenState extends ConsumerState<StudiosHubScreen> {
         data: (enabled) {
           bool isOn(String? cap) {
             if (cap == null) return true;
-            if (enabled.isEmpty) {
-              return StudioCatalog.primaryIds.contains(
-                StudioCatalog.allTools
-                    .firstWhere((t) => t.capability == cap,
-                        orElse: () => StudioCatalog.allTools.first)
-                    .id,
-              );
-            }
             return enabled.contains(cap);
           }
 
@@ -267,7 +252,7 @@ class _StudioTile extends StatelessWidget {
                     ),
                     if (!enabled) ...[
                       const SizedBox(width: 8),
-                      const SoonBadge(),
+                      const PlanLockBadge(),
                     ],
                   ],
                 ),
@@ -343,11 +328,21 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
               ? (data['items'] ?? data['gallery'] ?? []) as List
               : []);
       if (!mounted) return;
+      final parsed = list
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      // Prefer images first so AI generations surface when gallery mixes text.
+      parsed.sort((a, b) {
+        final ai = '${a['type']}'.contains('image') ||
+            _previewUrl(Map<String, dynamic>.from(a)) != null;
+        final bi = '${b['type']}'.contains('image') ||
+            _previewUrl(Map<String, dynamic>.from(b)) != null;
+        if (ai != bi) return ai ? -1 : 1;
+        return 0;
+      });
       setState(() {
-        _items = list
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
+        _items = parsed;
         _loading = false;
       });
     } on ApiException catch (e) {

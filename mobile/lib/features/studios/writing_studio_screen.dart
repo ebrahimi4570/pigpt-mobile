@@ -7,10 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
 import '../../core/brand.dart';
+import '../../core/live_status.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/app_chrome.dart';
+import '../../shared/widgets/live_status_line.dart';
 import '../../shared/widgets/pigpt_markdown.dart';
 import '../../shared/widgets/ui.dart';
 
@@ -36,6 +38,7 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
   bool _busy = false;
   String? _error;
   String _output = '';
+  LiveStatus _live = const LiveStatus();
   String? _seo;
   String? _exportHint;
   CancelToken? _cancel;
@@ -94,20 +97,9 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
       setState(() {
         _error = e.message;
         _loading = false;
-        _templates = [
-          WritingTemplate(
-            id: 'blog_article',
-            name: 'مقاله وبلاگ',
-            description: 'ایده تا پیش‌نویس قابل انتشار',
-            steps: [
-              WritingStep(id: 'ideate', name: 'ایده‌پردازی'),
-              WritingStep(id: 'outline', name: 'طرح کلی'),
-              WritingStep(id: 'draft', name: 'پیش‌نویس'),
-            ],
-          ),
-        ];
-        _templateId = 'blog_article';
-        _stepId = 'ideate';
+        _templates = const [];
+        _templateId = null;
+        _stepId = null;
       });
     }
   }
@@ -127,6 +119,7 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
       _busy = true;
       _error = null;
       _output = '';
+      _live = const LiveStatus(phase: LivePhase.waiting);
     });
     _cancel = CancelToken();
     final api = ref.read(apiClientProvider);
@@ -146,7 +139,13 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
       )) {
         if (event.event == 'token') {
           buffer += '${event.data['text'] ?? ''}';
-          setState(() => _output = buffer);
+          setState(() {
+            _output = buffer;
+            if (_live.phase == LivePhase.waiting ||
+                _live.phase == LivePhase.thinking) {
+              _live = const LiveStatus(phase: LivePhase.writing);
+            }
+          });
         } else if (event.event == 'error') {
           setState(() {
             _error =
@@ -192,14 +191,30 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
         setState(() => _error = e2.message);
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          if (_error != null) {
+            _live = LiveStatus(phase: LivePhase.error, errorFa: _error);
+          } else if (_output.trim().isNotEmpty) {
+            _live = const LiveStatus(phase: LivePhase.ready);
+          } else {
+            _live = const LiveStatus();
+          }
+        });
+      }
     }
   }
 
   void _stop() {
     _cancel?.cancel('user');
     _cancel = null;
-    setState(() => _busy = false);
+    setState(() {
+      _busy = false;
+      _live = _output.trim().isEmpty
+          ? const LiveStatus()
+          : const LiveStatus(phase: LivePhase.ready);
+    });
   }
 
   Future<void> _seoScore() async {
@@ -365,10 +380,9 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
                       const SizedBox(height: 12),
                       FilledButton(
                         onPressed: _busy ? null : _run,
-                        child: Text(_busy
-                            ? 'در حال نوشتن…'
-                            : 'اجرای مرحله «$stepLabel»'),
+                        child: Text('اجرای مرحله «$stepLabel»'),
                       ),
+                      LiveStatusLine(status: _live),
                       if (_busy) ...[
                         const SizedBox(height: 8),
                         OutlinedButton.icon(
@@ -412,7 +426,12 @@ class _WritingStudioScreenState extends ConsumerState<WritingStudioScreen> {
                         ),
                         const SizedBox(height: 8),
                         if (_output.isEmpty && _busy)
-                          const Text(PigptBrand.loadingWriting)
+                          LiveStatusLine(
+                            status: _live.phase == LivePhase.idle
+                                ? const LiveStatus(phase: LivePhase.waiting)
+                                : _live,
+                            compact: true,
+                          )
                         else
                           PigptMarkdown(data: _output),
                         if (_output.isNotEmpty) ...[

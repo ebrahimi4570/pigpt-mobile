@@ -36,6 +36,24 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     super.initState();
     _register = widget.mode == 'register';
     _loadMethods();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final oauthErr = ref.read(oauthErrorProvider);
+      if (oauthErr == null || oauthErr.isEmpty) return;
+      ref.read(oauthErrorProvider.notifier).state = null;
+      if (!mounted) return;
+      setState(() => _error = _friendlyOAuthError(oauthErr));
+    });
+  }
+
+  String _friendlyOAuthError(String raw) {
+    final lower = raw.toLowerCase();
+    if (lower.contains('access_denied') || lower.contains('denied')) {
+      return 'ورود با گوگل لغو شد';
+    }
+    if (lower.contains('cancelled') || lower.contains('canceled')) {
+      return 'ورود با گوگل لغو شد';
+    }
+    return 'ورود با گوگل ناموفق بود: $raw';
   }
 
   Future<void> _loadMethods() async {

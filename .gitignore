@@ -22,3 +22,8 @@ analyze2.log
 test.log
 .artifacts/
 
+
+hs_err_pid*.mdmp
+releases/*.apk
+releases/*.apk.ready
+

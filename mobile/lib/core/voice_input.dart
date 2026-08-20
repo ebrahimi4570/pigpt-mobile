@@ -31,10 +31,11 @@ class VoiceInputService {
     required String currentText,
     required void Function(String text) onText,
     required void Function(String error) onError,
+    void Function(String phase)? onPhase,
   }) async {
     if (busy) return;
     if (listening) {
-      await stop();
+      await stop(onText: onText, onError: onError, onPhase: onPhase);
       return;
     }
     if (!await _micPermission()) {
@@ -42,15 +43,20 @@ class VoiceInputService {
       return;
     }
     _base = currentText.trimRight();
-    final usedStt = await _startSpeech(onText: onText, onError: onError);
+    final usedStt = await _startSpeech(
+      onText: onText,
+      onError: onError,
+      onPhase: onPhase,
+    );
     if (!usedStt) {
-      await _startRecord(onText: onText, onError: onError);
+      await _startRecord(onText: onText, onError: onError, onPhase: onPhase);
     }
   }
 
   Future<bool> _startSpeech({
     required void Function(String text) onText,
     required void Function(String error) onError,
+    void Function(String phase)? onPhase,
   }) async {
     try {
       _sttReady = await _stt.initialize(
@@ -59,18 +65,20 @@ class VoiceInputService {
           if (code == 'error_speech_timeout' || code == 'error_no_match') {
             onError('گفتاری شنیده نشد');
             listening = false;
+            onPhase?.call('idle');
             return;
           }
           // Network / service failures (common in Iran) → Whisper fallback.
           if (listening) {
             listening = false;
             _stt.stop();
-            _startRecord(onText: onText, onError: onError);
+            _startRecord(onText: onText, onError: onError, onPhase: onPhase);
           }
         },
         onStatus: (s) {
           if (s == 'done' || s == 'notListening') {
             listening = false;
+            onPhase?.call('idle');
           }
         },
       );
@@ -82,6 +90,7 @@ class VoiceInputService {
       });
       final localeId = fa.isNotEmpty ? fa.first.localeId : 'fa_IR';
       listening = true;
+      onPhase?.call('listening');
       await _stt.listen(
         listenOptions: SpeechListenOptions(
           listenMode: ListenMode.dictation,
@@ -108,6 +117,7 @@ class VoiceInputService {
   Future<void> _startRecord({
     required void Function(String text) onText,
     required void Function(String error) onError,
+    void Function(String phase)? onPhase,
   }) async {
     try {
       final dir = await getTemporaryDirectory();
@@ -124,8 +134,10 @@ class VoiceInputService {
         path: path,
       );
       listening = true;
+      onPhase?.call('listening');
     } catch (_) {
       listening = false;
+      onPhase?.call('idle');
       onError('ضبط صدا شروع نشد');
     }
   }
@@ -133,22 +145,26 @@ class VoiceInputService {
   Future<void> stop({
     void Function(String text)? onText,
     void Function(String error)? onError,
+    void Function(String phase)? onPhase,
   }) async {
     if (_stt.isListening) {
       await _stt.stop();
       listening = false;
+      onPhase?.call('idle');
       return;
     }
     if (await _recorder.isRecording()) {
       final path = await _recorder.stop();
       listening = false;
       if (path == null || path.isEmpty) {
+        onPhase?.call('idle');
         onError?.call('گفتاری شنیده نشد');
         return;
       }
-      await _transcribe(path, onText: onText, onError: onError);
+      await _transcribe(path, onText: onText, onError: onError, onPhase: onPhase);
     } else {
       listening = false;
+      onPhase?.call('idle');
     }
   }
 
@@ -156,8 +172,10 @@ class VoiceInputService {
     String filePath, {
     void Function(String text)? onText,
     void Function(String error)? onError,
+    void Function(String phase)? onPhase,
   }) async {
     busy = true;
+    onPhase?.call('transcribing');
     try {
       final file = File(filePath);
       if (!file.existsSync() || file.lengthSync() == 0) {
@@ -182,6 +200,7 @@ class VoiceInputService {
       onError?.call('تبدیل گفتار ناموفق بود');
     } finally {
       busy = false;
+      onPhase?.call('idle');
       try {
         File(filePath).deleteSync();
       } catch (_) {}

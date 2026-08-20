@@ -40,3 +40,19 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+tasks.matching { it.name == "assembleRelease" || it.name == "assembleDebug" }.configureEach {
+    doLast {
+        try {
+            ProcessBuilder(
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File", "C:\\tools\\post-flutter-build.ps1",
+                "-AppDir", rootProject.projectDir.parentFile.absolutePath,
+            ).inheritIO().start().waitFor()
+        } catch (_: Exception) {
+            // Disk cleanup is best-effort; agent also runs the script after build.
+        }
+    }
+}

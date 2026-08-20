@@ -12,6 +12,8 @@ class ApiPaths {
   static const meModelPrefs = '/me/model-prefs';
   static const meLogoutAll = '/me/logout-all';
   static const meExport = '/me/export';
+  static const meApiKeys = '/me/api-keys';
+  static String meApiKey(String id) => '/me/api-keys/$id';
 
   static const models = '/models';
   static const chatTemplates = '/chat/templates';
@@ -30,6 +32,10 @@ class ApiPaths {
   static String conversationShare(String id) => '/conversations/$id/share';
 
   static const agentMissions = '/agent/missions';
+  static const agentWorkspaces = '/agent/workspaces';
+  static String agentWorkspace(String id) => '/agent/workspaces/$id';
+  static String agentWorkspaceSelect(String id) =>
+      '/agent/workspaces/$id/select';
   static String agentMission(String id) => '/agent/missions/$id';
   static String agentMissionNext(String id) => '/agent/missions/$id/next';
   static String agentMissionComplete(String id) =>
@@ -58,6 +64,15 @@ class ApiPaths {
   static const billingPaymentsMe = '/billing/payments/me';
   static String billingInvoicePdf(String id) =>
       '/billing/payments/$id/invoice.pdf';
+
+  /// Offline card-to-card (live web payment — gateway is off).
+  static const billingOfflineSettings = '/billing/offline-settings';
+  static const billingOfflineRequestsMe = '/billing/offline-requests/me';
+  static const billingOfflineRequests = '/billing/offline-requests';
+  static String billingOfflineRequest(String id) =>
+      '/billing/offline-requests/$id';
+  static String billingOfflineRequestCancel(String id) =>
+      '/billing/offline-requests/$id/cancel';
 
   static const chatTranscribe = '/chat/transcribe';
   static const messageDrafts = '/message-drafts';
@@ -109,10 +124,18 @@ class ApiPaths {
   static const studiosMarketplace = '/studios/marketplace';
   static const studiosGallery = '/studios/gallery';
   static String sharePublic(String token) => '/share/$token';
-  static String supportTicket(String id) => '/support/tickets/$id';
 
-  static const supportTickets = '/support/tickets';
-  static const referral = '/referral';
+  /// Live web tickets API (not `/support/tickets`).
+  static const supportTickets = '/tickets';
+  static String supportTicket(String id) => '/tickets/$id';
+  static String supportTicketMessages(String id) => '/tickets/$id/messages';
+
+  static const referral = '/referral/me';
   static const usage = '/usage';
   static const capabilities = '/capabilities';
+
+  static const conversationFolders = '/conversation-folders';
+  static String conversationFolder(String id) => '/conversation-folders/$id';
+  static String conversationOrganize(String id) =>
+      '/conversations/$id/organize';
 }

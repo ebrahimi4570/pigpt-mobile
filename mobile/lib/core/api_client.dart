@@ -148,16 +148,21 @@ class ApiClient {
   }
 
   /// Multipart upload to `/uploads`. Returns `{id, ...}`.
+  /// Pass [purpose] `offline_receipt` for card-to-card payment receipts.
   Future<Map<String, dynamic>> uploadFile(
     String filePath, {
     String fieldName = 'file',
     String? filename,
+    String? purpose,
   }) async {
     return postMultipart(
       '/uploads',
       filePath: filePath,
       fieldName: fieldName,
       filename: filename,
+      query: purpose != null && purpose.isNotEmpty
+          ? {'purpose': purpose}
+          : null,
     );
   }
 
@@ -168,6 +173,7 @@ class ApiClient {
     String fieldName = 'file',
     String? filename,
     Map<String, dynamic>? fields,
+    Map<String, dynamic>? query,
   }) async {
     try {
       final map = <String, dynamic>{
@@ -182,6 +188,7 @@ class ApiClient {
       final res = await _dio.post<dynamic>(
         path,
         data: form,
+        queryParameters: query,
         options: Options(
           contentType: 'multipart/form-data',
           headers: {'Content-Type': 'multipart/form-data'},

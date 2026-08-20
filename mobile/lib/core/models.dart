@@ -33,6 +33,8 @@ class UserMe extends Equatable {
     this.dailyTokenLimit,
     this.dailyTokensUsed,
     this.dailyTokensRemaining,
+    this.spendableToday,
+    this.dailyUnlimited = false,
     this.planId,
     this.planName,
   });
@@ -51,6 +53,8 @@ class UserMe extends Equatable {
   final num? dailyTokenLimit;
   final num? dailyTokensUsed;
   final num? dailyTokensRemaining;
+  final num? spendableToday;
+  final bool dailyUnlimited;
   final String? planId;
   final String? planName;
 
@@ -76,8 +80,14 @@ class UserMe extends Equatable {
           j['daily_token_limit'] as num?,
       dailyTokensUsed: wallet['daily_tokens_used'] as num? ??
           j['daily_tokens_used'] as num?,
-      dailyTokensRemaining: wallet['daily_tokens_remaining'] as num? ??
+      dailyTokensRemaining: wallet['spendable_today'] as num? ??
+          wallet['daily_tokens_remaining'] as num? ??
+          j['spendable_today'] as num? ??
           j['daily_tokens_remaining'] as num?,
+      spendableToday: wallet['spendable_today'] as num? ??
+          j['spendable_today'] as num?,
+      dailyUnlimited: wallet['daily_unlimited'] == true ||
+          j['daily_unlimited'] == true,
       planId: j['plan_id']?.toString() ?? j['current_plan_id']?.toString(),
       planName: j['plan_name']?.toString(),
     );
@@ -99,19 +109,25 @@ class AiModel {
     this.description,
     this.vendor,
     this.enabled = true,
+    this.reason,
+    this.reasonFa,
   });
   final String id;
   final String name;
   final String? description;
   final String? vendor;
   final bool enabled;
+  final String? reason;
+  final String? reasonFa;
 
   factory AiModel.fromJson(Map<String, dynamic> j) => AiModel(
         id: '${j['id'] ?? j['model_id']}',
         name: '${j['name'] ?? j['display_name'] ?? j['id']}',
         description: j['description']?.toString(),
         vendor: j['vendor']?.toString() ?? j['provider']?.toString(),
-        enabled: j['enabled'] != false,
+        enabled: j['enabled'] != false && j['disabled'] != true,
+        reason: j['reason']?.toString(),
+        reasonFa: j['reason_fa']?.toString() ?? j['reasonFa']?.toString(),
       );
 }
 
@@ -165,7 +181,8 @@ class ChatMessage {
     this.streaming = false,
     this.attachmentIds = const [],
     this.localPath,
-  });
+    String? layoutKey,
+  }) : layoutKey = layoutKey ?? id;
 
   final String id;
   final String role; // user | assistant | system
@@ -176,6 +193,8 @@ class ChatMessage {
   final bool streaming;
   final List<String> attachmentIds;
   final String? localPath;
+  /// Stable ListView key. Survives local→server id swap after a stream.
+  final String layoutKey;
 
   ChatMessage copyWith({
     String? content,
@@ -184,6 +203,7 @@ class ChatMessage {
     String? modelId,
     List<String>? attachmentIds,
     String? localPath,
+    String? layoutKey,
   }) =>
       ChatMessage(
         id: id,
@@ -195,6 +215,7 @@ class ChatMessage {
         streaming: streaming ?? this.streaming,
         attachmentIds: attachmentIds ?? this.attachmentIds,
         localPath: localPath ?? this.localPath,
+        layoutKey: layoutKey ?? this.layoutKey,
       );
 
   factory ChatMessage.fromJson(Map<String, dynamic> j) {
@@ -219,6 +240,40 @@ class ChatMessage {
   }
 }
 
+class AgentWorkspace {
+  AgentWorkspace({
+    required this.id,
+    required this.name,
+    required this.slug,
+    required this.path,
+    this.lastUsedAt,
+  });
+
+  final String id;
+  final String name;
+  final String slug;
+  final String path;
+  final DateTime? lastUsedAt;
+
+  factory AgentWorkspace.fromJson(Map<String, dynamic> j) => AgentWorkspace(
+        id: '${j['id'] ?? j['slug'] ?? ''}',
+        name: '${j['name'] ?? j['slug'] ?? j['path'] ?? 'مسیر'}',
+        slug: '${j['slug'] ?? ''}',
+        path: '${j['path'] ?? j['workspace_path'] ?? ''}',
+        lastUsedAt: j['last_used_at'] != null
+            ? DateTime.tryParse(j['last_used_at'].toString())
+            : null,
+      );
+
+  String get label {
+    final n = name.trim();
+    if (n.isNotEmpty) return n;
+    final p = path.trim();
+    if (p.isNotEmpty) return p.split('/').where((s) => s.isNotEmpty).last;
+    return 'مسیر';
+  }
+}
+
 class AgentMission {
   AgentMission({
     required this.id,
@@ -227,6 +282,9 @@ class AgentMission {
     this.modelId,
     this.steps = const [],
     this.createdAt,
+    this.workspacePath,
+    this.workspaceId,
+    this.workspaceName,
   });
 
   final String id;
@@ -235,6 +293,9 @@ class AgentMission {
   final String? modelId;
   final List<AgentStep> steps;
   final DateTime? createdAt;
+  final String? workspacePath;
+  final String? workspaceId;
+  final String? workspaceName;
 
   factory AgentMission.fromJson(Map<String, dynamic> j) {
     final rawSteps = j['steps'];
@@ -253,6 +314,9 @@ class AgentMission {
       createdAt: j['created_at'] != null
           ? DateTime.tryParse(j['created_at'].toString())
           : null,
+      workspacePath: j['workspace_path']?.toString() ?? j['path']?.toString(),
+      workspaceId: j['workspace_id']?.toString(),
+      workspaceName: j['workspace_name']?.toString(),
     );
   }
 
@@ -284,17 +348,20 @@ class AgentStep {
     required this.title,
     this.status,
     this.detail,
+    this.needsTool,
   });
   final String id;
   final String title;
   final String? status;
   final String? detail;
+  final String? needsTool;
 
   factory AgentStep.fromJson(Map<String, dynamic> j) => AgentStep(
         id: '${j['id'] ?? j['step_id'] ?? ''}',
         title: '${j['title'] ?? j['name'] ?? j['summary'] ?? 'قدم'}',
         status: j['status']?.toString(),
         detail: j['detail']?.toString() ?? j['output']?.toString(),
+        needsTool: j['needs_tool']?.toString() ?? j['tool']?.toString(),
       );
 }
 
@@ -316,6 +383,7 @@ class QuickStartCard {
     required this.id,
     required this.title,
     this.description,
+    this.category = 'سایر',
     this.kind = 'text',
     this.fields = const [],
     this.qualityOptions = const ['fast'],
@@ -325,6 +393,7 @@ class QuickStartCard {
   final String id;
   final String title;
   final String? description;
+  final String category;
   final String kind;
   final List<QuickStartField> fields;
   final List<String> qualityOptions;
@@ -370,6 +439,9 @@ class QuickStartCard {
           j['description_fa']?.toString() ??
           j['blurb_fa']?.toString() ??
           j['blurb']?.toString(),
+      category: '${j['category_fa'] ?? j['category'] ?? 'سایر'}'.trim().isEmpty
+          ? 'سایر'
+          : '${j['category_fa'] ?? j['category'] ?? 'سایر'}'.trim(),
       kind: '${j['kind'] ?? 'text'}',
       fields: fields,
       qualityOptions: ids.isNotEmpty ? ids : const ['fast', 'quality'],
@@ -513,6 +585,8 @@ class BillingWallet {
     this.paidAvailable,
     this.freeDailyCap,
     this.freeDailyRemaining,
+    this.spendableToday,
+    this.dailyUnlimited = false,
     this.canGenerate = true,
   });
   final num balance;
@@ -520,6 +594,8 @@ class BillingWallet {
   final num? paidAvailable;
   final num? freeDailyCap;
   final num? freeDailyRemaining;
+  final num? spendableToday;
+  final bool dailyUnlimited;
   final bool canGenerate;
 
   factory BillingWallet.fromJson(Map<String, dynamic> j) {
@@ -527,11 +603,13 @@ class BillingWallet {
         ? Map<String, dynamic>.from(j['wallet'] as Map)
         : j;
     return BillingWallet(
-      balance: w['balance'] as num? ?? 0,
+      balance: w['wallet_balance'] as num? ?? w['balance'] as num? ?? 0,
       freeRemaining: w['free_remaining'] as num?,
       paidAvailable: w['paid_available'] as num?,
       freeDailyCap: w['free_daily_cap'] as num?,
       freeDailyRemaining: w['free_daily_remaining'] as num?,
+      spendableToday: w['spendable_today'] as num?,
+      dailyUnlimited: w['daily_unlimited'] == true,
       canGenerate: w['can_generate'] != false,
     );
   }

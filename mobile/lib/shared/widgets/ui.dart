@@ -186,6 +186,15 @@ class SoonBadge extends StatelessWidget {
   }
 }
 
+class PlanLockBadge extends StatelessWidget {
+  const PlanLockBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const StatusBadge(label: 'قفل پلن');
+  }
+}
+
 /// Badge for the user's active subscription plan (not «به‌زودی»).
 class CurrentPlanBadge extends StatelessWidget {
   const CurrentPlanBadge({super.key});
@@ -227,6 +236,8 @@ class WalletBanner extends StatelessWidget {
     this.balance,
     this.dailyRemaining,
     this.dailyCap,
+    this.dailyUnlimited = false,
+    this.nearCap = false,
     this.onTopUp,
   });
 
@@ -234,21 +245,31 @@ class WalletBanner extends StatelessWidget {
   final num? balance;
   final num? dailyRemaining;
   final num? dailyCap;
+  final bool dailyUnlimited;
+  final bool nearCap;
   final VoidCallback? onTopUp;
 
   @override
   Widget build(BuildContext context) {
-    if (canGenerate && dailyRemaining == null && balance == null) {
+    if (canGenerate &&
+        !nearCap &&
+        dailyRemaining == null &&
+        balance == null) {
       return const SizedBox.shrink();
     }
     final blocked = !canGenerate;
+    final warn = !blocked && nearCap;
     return SoftCard(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         children: [
           Icon(
-            blocked ? Icons.warning_amber_rounded : Icons.account_balance_wallet_outlined,
-            color: blocked ? PigptColors.warning : PigptColors.brand,
+            blocked
+                ? Icons.warning_amber_rounded
+                : warn
+                    ? Icons.timelapse_rounded
+                    : Icons.account_balance_wallet_outlined,
+            color: blocked || warn ? PigptColors.warning : PigptColors.brand,
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -258,8 +279,11 @@ class WalletBanner extends StatelessWidget {
                 Text(
                   blocked
                       ? 'سقف روزانه یا موجودی کافی نیست'
-                      : 'موجودی: ${balance ?? '—'} · روزانه: ${dailyRemaining ?? '—'}'
-                          '${dailyCap != null ? ' / $dailyCap' : ''}',
+                      : warn
+                          ? 'باقیمانده امروز کم است: ${dailyRemaining ?? '—'}'
+                          : dailyUnlimited
+                              ? 'موجودی کیف: ${balance ?? '—'} · بدون سقف روزانه'
+                              : 'موجودی کیف: ${balance ?? '—'} · باقیمانده امروز: ${dailyRemaining ?? '—'}',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
@@ -267,6 +291,13 @@ class WalletBanner extends StatelessWidget {
                 if (blocked)
                   Text(
                     'برای ادامه، پلن را ارتقا دهید یا منتظر ریست سقف تهران بمانید.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: PigptColors.inkMuted,
+                        ),
+                  )
+                else if (warn)
+                  Text(
+                    'قبل از اتمام سقف، کیف را شارژ کنید.',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: PigptColors.inkMuted,
                         ),

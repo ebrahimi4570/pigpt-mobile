@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
 import '../../core/brand.dart';
+import '../../core/jalali.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/app_chrome.dart';
@@ -97,11 +98,14 @@ class _UsageScreenState extends ConsumerState<UsageScreen> {
         : <String, dynamic>{};
     final messagesUsed = data['messages_used'] ?? data['used'] ?? wallet['daily_tokens_used'];
     final dailyLimit = data['daily_limit'] ?? data['limit'] ?? wallet['daily_token_limit'];
-    final remaining = data['remaining'] ??
+    final remaining = data['spendable_today'] ??
+        wallet['spendable_today'] ??
+        data['remaining'] ??
         data['daily_tokens_remaining'] ??
-        wallet['daily_tokens_remaining'] ??
-        wallet['free_daily_remaining'];
-    final balance = wallet['balance'] ?? data['balance'];
+        wallet['daily_tokens_remaining'];
+    final unlimited = wallet['daily_unlimited'] == true ||
+        data['daily_unlimited'] == true;
+    final balance = wallet['wallet_balance'] ?? wallet['balance'] ?? data['balance'];
     final items = (data['items'] ?? data['ledger'] ?? data['entries']) is List
         ? (data['items'] ?? data['ledger'] ?? data['entries']) as List
         : const [];
@@ -127,7 +131,9 @@ class _UsageScreenState extends ConsumerState<UsageScreen> {
                 Expanded(
                   child: _StatTile(
                     label: 'سقف',
-                    value: _fmtNum(dailyLimit is num ? dailyLimit : null),
+                    value: unlimited
+                        ? 'بدون سقف روزانه'
+                        : _fmtNum(dailyLimit is num ? dailyLimit : null),
                   ),
                 ),
               ],
@@ -137,8 +143,10 @@ class _UsageScreenState extends ConsumerState<UsageScreen> {
               children: [
                 Expanded(
                   child: _StatTile(
-                    label: 'باقیمانده',
-                    value: _fmtNum(remaining is num ? remaining : null),
+                    label: 'باقیمانده امروز',
+                    value: unlimited
+                        ? 'بدون سقف روزانه'
+                        : _fmtNum(remaining is num ? remaining : null),
                   ),
                 ),
                 Expanded(
@@ -161,9 +169,15 @@ class _UsageScreenState extends ConsumerState<UsageScreen> {
               ? Map<String, dynamic>.from(raw)
               : <String, dynamic>{'raw': raw};
           final title =
-              '${m['description_fa'] ?? m['description'] ?? m['kind'] ?? m['type'] ?? 'تراکنش'}';
-          final amount = m['amount'] ?? m['tokens'] ?? m['delta'];
+              '${m['entry_type'] ?? m['description_fa'] ?? m['description'] ?? m['kind'] ?? m['type'] ?? 'تراکنش'}';
+          final amount = m['platform_tokens_delta'] ??
+              m['amount'] ??
+              m['tokens'] ??
+              m['delta'];
           final at = m['created_at'] ?? m['at'] ?? '';
+          final costRial = m['cost_rial'];
+          final costToman = m['cost_toman'] ??
+              (costRial is num ? costRial / 10 : null);
           return SoftCard(
             margin: const EdgeInsets.only(bottom: 8),
             child: Row(
@@ -175,9 +189,15 @@ class _UsageScreenState extends ConsumerState<UsageScreen> {
                       Text(title,
                           style: const TextStyle(fontWeight: FontWeight.w700)),
                       if ('$at'.isNotEmpty)
-                        Text('$at',
+                        Text(JalaliFmt.format(at),
                             style: const TextStyle(
                                 color: PigptColors.inkFaint, fontSize: 12)),
+                      if (costToman is num)
+                        Text(
+                          '${_fmtNum(costToman)} تومان',
+                          style: const TextStyle(
+                              color: PigptColors.inkFaint, fontSize: 12),
+                        ),
                     ],
                   ),
                 ),
@@ -280,18 +300,31 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
   @override
   Widget build(BuildContext context) {
     final d = _data ?? const {};
-    final code = '${d['code'] ?? d['referral_code'] ?? d['invite_code'] ?? ''}';
-    final link = '${d['link'] ?? d['url'] ?? d['invite_url'] ?? (code.isNotEmpty ? '${PigptBrand.webUrl}/?ref=$code' : '')}';
-    final invited = d['invited_count'] ?? d['referrals'] ?? d['count'];
-    final reward = d['reward_fa'] ?? d['reward'] ?? d['bonus_tokens'];
+    final code =
+        '${d['invite_code'] ?? d['code'] ?? d['referral_code'] ?? ''}'.trim();
+    final rawLink =
+        '${d['invite_url'] ?? d['link'] ?? d['url'] ?? ''}'.trim();
+    final link = rawLink.isEmpty
+        ? (code.isEmpty ? '' : '${PigptBrand.webUrl}/auth?ref=$code')
+        : (rawLink.startsWith('http')
+            ? rawLink
+            : '${PigptBrand.webUrl}${rawLink.startsWith('/') ? '' : '/'}$rawLink');
+    final invited = d['invited_count'] ??
+        d['successful_count'] ??
+        d['referrals'] ??
+        d['count'];
+    final reward = d['reward_fa'] ??
+        d['bonus_label_fa'] ??
+        d['reward'] ??
+        d['bonus_tokens'];
 
     return Scaffold(
-      appBar: const PigptAppBar(title: 'ارجاع', showBack: true),
+      appBar: const PigptAppBar(title: 'دعوت دوستان', showBack: true),
       body: _loading
           ? const CardShimmer(height: 180)
           : _error != null
               ? EmptyState(
-                  title: 'ارجاع',
+                  title: 'دعوت دوستان',
                   body: _error,
                   action: FilledButton(
                       onPressed: _load, child: const Text('تلاش دوباره')),
@@ -305,7 +338,8 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                         children: [
                           const SectionHeader(
                             title: 'کد دعوت شما',
-                            subtitle: 'دوستان را دعوت کنید و پاداش بگیرید',
+                            subtitle:
+                                'دوستانتان با این کد ثبت‌نام کنند؛ هر دو پاداش می‌گیرید.',
                           ),
                           const SizedBox(height: 16),
                           if (code.isNotEmpty)
@@ -326,9 +360,20 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                                   color: PigptColors.brand,
                                 ),
                               ),
+                            )
+                          else
+                            const Text(
+                              'کد دعوت هنوز آماده نیست.',
+                              style: TextStyle(color: PigptColors.inkMuted),
                             ),
                           if (link.isNotEmpty) ...[
                             const SizedBox(height: 12),
+                            const Text(
+                              'لینک دعوت',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700, fontSize: 13),
+                            ),
+                            const SizedBox(height: 6),
                             SelectableText(
                               link,
                               textDirection: TextDirection.ltr,
@@ -354,7 +399,7 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                                                   content: Text('کپی شد')));
                                         },
                                   icon: const Icon(Icons.copy_rounded),
-                                  label: const Text('کپی'),
+                                  label: const Text('کپی لینک'),
                                 ),
                               ),
                               const SizedBox(width: 8),
@@ -363,11 +408,13 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                                   onPressed: link.isEmpty && code.isEmpty
                                       ? null
                                       : () => Share.share(
-                                            link.isNotEmpty ? link : code,
+                                            link.isNotEmpty
+                                                ? 'با این لینک به PiGPT بپیوندید:\n$link'
+                                                : 'کد دعوت PiGPT: $code',
                                             subject: 'دعوت به PiGPT',
                                           ),
                                   icon: const Icon(Icons.share_rounded),
-                                  label: const Text('اشتراک'),
+                                  label: const Text('اشتراک‌گذاری'),
                                 ),
                               ),
                             ],
@@ -381,14 +428,21 @@ class _ReferralScreenState extends ConsumerState<ReferralScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'دعوت‌شده‌ها: ${invited ?? '—'}',
+                            'دعوت‌های موفق: ${invited ?? '—'}',
                             style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
                           if (reward != null) ...[
                             const SizedBox(height: 6),
-                            Text('پاداش: $reward',
+                            Text('$reward',
                                 style: const TextStyle(
                                     color: PigptColors.inkMuted)),
+                          ] else ...[
+                            const SizedBox(height: 6),
+                            const Text(
+                              'پاداش پس از ثبت‌نام و فعال‌سازی حساب دوست اعمال می‌شود.',
+                              style: TextStyle(
+                                  color: PigptColors.inkMuted, height: 1.5),
+                            ),
                           ],
                         ],
                       ),
@@ -413,6 +467,7 @@ class _SupportScreenState extends ConsumerState<SupportScreen> {
   bool _loading = true;
   String? _msg;
   bool _submitting = false;
+  String _type = 'question';
 
   @override
   void initState() {
@@ -461,9 +516,11 @@ class _SupportScreenState extends ConsumerState<SupportScreen> {
       await ref.read(apiClientProvider).post(
         ApiPaths.supportTickets,
         data: {
+          'title': _subject.text.trim(),
           'subject': _subject.text.trim(),
           'body': _body.text.trim(),
-          'message': _body.text.trim(),
+          'type': _type,
+          'priority': 'normal',
         },
       );
       _subject.clear();
@@ -488,8 +545,25 @@ class _SupportScreenState extends ConsumerState<SupportScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SectionHeader(title: 'تیکت جدید'),
+                const SectionHeader(
+                  title: 'تیکت جدید',
+                  subtitle: 'سؤال، مشکل یا پیشنهاد خود را بفرستید',
+                ),
                 const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: _type,
+                  decoration: const InputDecoration(labelText: 'نوع'),
+                  items: const [
+                    DropdownMenuItem(value: 'question', child: Text('سؤال')),
+                    DropdownMenuItem(value: 'bug', child: Text('باگ')),
+                    DropdownMenuItem(value: 'financial', child: Text('مالی')),
+                    DropdownMenuItem(value: 'suggestion', child: Text('پیشنهاد')),
+                    DropdownMenuItem(value: 'criticism', child: Text('انتقاد')),
+                    DropdownMenuItem(value: 'other', child: Text('سایر')),
+                  ],
+                  onChanged: (v) => setState(() => _type = v ?? 'question'),
+                ),
+                const SizedBox(height: 12),
                 TextField(
                   controller: _subject,
                   decoration: const InputDecoration(labelText: 'موضوع'),
@@ -526,8 +600,9 @@ class _SupportScreenState extends ConsumerState<SupportScreen> {
           else
             ..._tickets.map((t) {
               final id = '${t['id'] ?? ''}';
-              final subject = '${t['subject'] ?? t['title'] ?? 'تیکت'}';
-              final status = '${t['status'] ?? t['state'] ?? ''}';
+              final subject = '${t['title'] ?? t['subject'] ?? 'تیکت'}';
+              final status = '${t['status_label_fa'] ?? t['status'] ?? t['state'] ?? ''}';
+              final at = JalaliFmt.format(t['created_at'] ?? t['updated_at']);
               return SoftCard(
                 margin: const EdgeInsets.only(bottom: 8),
                 onTap: id.isEmpty
@@ -542,8 +617,10 @@ class _SupportScreenState extends ConsumerState<SupportScreen> {
                           Text(subject,
                               style:
                                   const TextStyle(fontWeight: FontWeight.w700)),
-                          if (status.isNotEmpty)
-                            Text(status,
+                          if (status.isNotEmpty || at != '—')
+                            Text(
+                                [if (status.isNotEmpty) status, if (at != '—') at]
+                                    .join(' · '),
                                 style: const TextStyle(
                                     color: PigptColors.inkMuted, fontSize: 12)),
                         ],
@@ -611,8 +688,8 @@ class _SupportTicketDetailScreenState
     setState(() => _busy = true);
     try {
       await ref.read(apiClientProvider).post(
-        ApiPaths.supportTicket(widget.id),
-        data: {'body': text, 'message': text},
+        ApiPaths.supportTicketMessages(widget.id),
+        data: {'body': text},
       );
       _reply.clear();
       await _load();

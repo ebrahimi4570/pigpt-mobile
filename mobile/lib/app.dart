@@ -20,6 +20,33 @@ class PigptApp extends ConsumerWidget {
     final locale = ref.watch(localeProvider);
     final isFa = locale.languageCode != 'en';
 
+    ref.listen<String?>(planLockedMessageProvider, (prev, next) {
+      if (next == null || next.isEmpty) return;
+      final nav = router.routerDelegate.navigatorKey.currentContext;
+      if (nav == null) return;
+      ref.read(planLockedMessageProvider.notifier).state = null;
+      showDialog<void>(
+        context: nav,
+        builder: (ctx) => AlertDialog(
+          title: const Text('محدودیت پلن'),
+          content: Text(next),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('بستن'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                router.push('/account/plans');
+              },
+              child: const Text('مشاهده پلن‌ها'),
+            ),
+          ],
+        ),
+      );
+    });
+
     return DeepLinkBootstrap(
       child: MaterialApp.router(
         title: PigptBrand.webDisplay,

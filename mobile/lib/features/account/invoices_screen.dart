@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
+import '../../core/jalali.dart';
 import '../../core/media_io.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
@@ -55,6 +56,11 @@ class _InvoicesScreenState extends ConsumerState<InvoicesScreen> {
         _loading = false;
       });
     }
+  }
+
+  String _fmtDate(String? iso) {
+    if (iso == null || iso.isEmpty) return '';
+    return JalaliFmt.format(iso);
   }
 
   String _label(Map<String, dynamic> p) {
@@ -141,7 +147,7 @@ class _InvoicesScreenState extends ConsumerState<InvoicesScreen> {
                                 ),
                                 if (p['created_at'] != null)
                                   Text(
-                                    '${p['created_at']}',
+                                    _fmtDate('${p['created_at']}'),
                                     style: TextStyle(
                                       color: PigptColors.faintOf(context),
                                       fontSize: 11,

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../features/account/account_screens.dart';
 import '../features/account/invoices_screen.dart';
+import '../features/account/offline_payment_screens.dart';
 import '../features/account/settings_screen.dart';
 import '../features/account/usage_referral_support.dart';
 import '../features/agent/agent_screens.dart';
@@ -179,6 +180,21 @@ final goRouterProvider = Provider<GoRouter>((ref) {
                 builder: (_, state) => PlansScreen(
                   billingStatus: state.uri.queryParameters['billing'],
                 ),
+              ),
+              GoRoute(
+                path: 'plans-compare',
+                builder: (_, __) => const PlansCompareScreen(),
+              ),
+              GoRoute(
+                path: 'offline-pay',
+                builder: (_, state) => OfflinePayScreen(
+                  planId: state.uri.queryParameters['plan_id'],
+                  packageId: state.uri.queryParameters['package_id'],
+                ),
+              ),
+              GoRoute(
+                path: 'offline-payments',
+                builder: (_, __) => const OfflineRequestsScreen(),
               ),
               GoRoute(
                 path: 'invoices',

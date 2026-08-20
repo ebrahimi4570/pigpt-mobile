@@ -2,17 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/brand.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
+import 'command_palette.dart';
 import 'ui.dart';
 
 /// Root scaffold key so nested pages can open the right-side drawer.
 final rootScaffoldKeyProvider =
     Provider<GlobalKey<ScaffoldState>>((ref) => GlobalKey<ScaffoldState>());
 
-/// Contextual chat actions registered by the active thread (used by the drawer).
+/// Contextual actions for the open thread (shown in the app-bar ⋮ menu, not the drawer).
 class ChatChromeActions {
   const ChatChromeActions({
     this.conversationId,
@@ -55,7 +57,7 @@ void openPigptMenu(BuildContext context, WidgetRef ref) {
   }
 }
 
-/// Clean app bar: menu + title (+ optional back). No history/model/share clutter.
+/// Clean app bar: menu + title + thread ⋮ + avatar. Drawer is app-level nav only.
 class PigptAppBar extends ConsumerWidget implements PreferredSizeWidget {
   const PigptAppBar({
     super.key,
@@ -92,6 +94,9 @@ class PigptAppBar extends ConsumerWidget implements PreferredSizeWidget {
             overflow: TextOverflow.ellipsis,
           ),
       actions: [
+        ...?actions,
+        const _ChatOverflowButton(),
+        const _AccountAvatarButton(),
         if (showBack)
           IconButton(
             tooltip: 'بازگشت',
@@ -108,14 +113,198 @@ class PigptAppBar extends ConsumerWidget implements PreferredSizeWidget {
                   : Icons.arrow_back_rounded,
             ),
           ),
-        ...?actions,
       ],
       backgroundColor: cs.surface.withValues(alpha: 0.94),
     );
   }
 }
 
-/// Dense web-like sidebar (icon + 12–13sp label, tight rows, section headers).
+class _ChatOverflowButton extends ConsumerWidget {
+  const _ChatOverflowButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final chrome = ref.watch(chatChromeProvider);
+    if (chrome == null) return const SizedBox.shrink();
+    final muted = PigptColors.mutedOf(context);
+    return PopupMenuButton<String>(
+      tooltip: 'این گفتگو',
+      padding: EdgeInsets.zero,
+      offset: const Offset(0, 8),
+      icon: Icon(Icons.more_vert_rounded, color: muted),
+      onSelected: (value) {
+        HapticFeedback.selectionClick();
+        final c = ref.read(chatChromeProvider);
+        if (c == null) return;
+        switch (value) {
+          case 'model':
+            c.onPickModel();
+          case 'rename':
+            c.onRename?.call();
+          case 'share':
+            c.onShare?.call();
+          case 'templates':
+            c.onTemplates?.call();
+          case 'regen':
+            c.onRegenerate?.call();
+          case 'pin':
+            c.onPin?.call();
+          case 'archive':
+            c.onArchive?.call();
+          case 'delete':
+            c.onDelete?.call();
+          default:
+            break;
+        }
+      },
+      itemBuilder: (ctx) {
+        final c = ref.read(chatChromeProvider);
+        if (c == null) return const [];
+        final danger = PigptColors.danger;
+        return <PopupMenuEntry<String>>[
+          const PopupMenuItem(
+            value: 'model',
+            child: _OverflowRow(
+              icon: Icons.auto_awesome_rounded,
+              label: 'مدل این گفتگو',
+            ),
+          ),
+          if (c.onRename != null)
+            const PopupMenuItem(
+              value: 'rename',
+              child: _OverflowRow(
+                icon: Icons.drive_file_rename_outline_rounded,
+                label: 'تغییر نام',
+              ),
+            ),
+          if (c.onShare != null)
+            const PopupMenuItem(
+              value: 'share',
+              child: _OverflowRow(
+                icon: Icons.ios_share_rounded,
+                label: 'اشتراک',
+              ),
+            ),
+          if (c.onTemplates != null)
+            const PopupMenuItem(
+              value: 'templates',
+              child: _OverflowRow(
+                icon: Icons.article_outlined,
+                label: 'قالب‌ها',
+              ),
+            ),
+          if (c.onRegenerate != null)
+            const PopupMenuItem(
+              value: 'regen',
+              child: _OverflowRow(
+                icon: Icons.refresh_rounded,
+                label: 'بازتولید پاسخ',
+              ),
+            ),
+          if (c.onPin != null)
+            const PopupMenuItem(
+              value: 'pin',
+              child: _OverflowRow(
+                icon: Icons.push_pin_outlined,
+                label: 'سنجاق',
+              ),
+            ),
+          if (c.onArchive != null)
+            const PopupMenuItem(
+              value: 'archive',
+              child: _OverflowRow(
+                icon: Icons.archive_outlined,
+                label: 'بایگانی',
+              ),
+            ),
+          if (c.onDelete != null)
+            PopupMenuItem(
+              value: 'delete',
+              child: _OverflowRow(
+                icon: Icons.delete_outline_rounded,
+                label: 'حذف گفتگو',
+                color: danger,
+              ),
+            ),
+        ];
+      },
+    );
+  }
+}
+
+class _OverflowRow extends StatelessWidget {
+  const _OverflowRow({
+    required this.icon,
+    required this.label,
+    this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = color ?? PigptColors.inkOf(context);
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: c),
+        const SizedBox(width: 12),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            color: c,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AccountAvatarButton extends ConsumerWidget {
+  const _AccountAvatarButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final me = ref.watch(meProvider);
+    final name = me?.greetingName ?? 'PiGPT';
+    final letter = name.isNotEmpty ? name.characters.first : 'π';
+    final onAccount = GoRouterState.of(context).uri.path.startsWith('/account');
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 4),
+      child: Tooltip(
+        message: 'حساب و تنظیمات',
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: () {
+            HapticFeedback.selectionClick();
+            if (onAccount) return;
+            context.go('/account');
+          },
+          child: CircleAvatar(
+            radius: 14,
+            backgroundColor: Theme.of(context)
+                .colorScheme
+                .primary
+                .withValues(alpha: onAccount ? 0.28 : 0.18),
+            child: Text(
+              letter,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Dense web-like sidebar: app-level nav only (icon ~20px, label ~14sp).
 class PigptDrawer extends ConsumerWidget {
   const PigptDrawer({super.key});
 
@@ -128,7 +317,7 @@ class PigptDrawer extends ConsumerWidget {
     final border = PigptColors.borderOf(context);
 
     return Drawer(
-      width: 272,
+      width: 284,
       backgroundColor: Theme.of(context).brightness == Brightness.dark
           ? const Color(0xFF0E1624)
           : const Color(0xFFF7F9FC),
@@ -206,98 +395,11 @@ class PigptDrawer extends ConsumerWidget {
                   ),
                   _row(
                     context,
-                    icon: Icons.auto_awesome_rounded,
-                    label: 'مدل',
-                    active: loc == '/models',
-                    onTap: () {
-                      Navigator.pop(context);
-                      if (chrome != null) {
-                        chrome.onPickModel();
-                      } else {
-                        context.push('/models');
-                      }
-                    },
-                  ),
-                  _row(
-                    context,
                     icon: Icons.smart_toy_outlined,
-                    label: 'ماموریت ایجنت',
+                    label: 'ایجنت',
                     active: loc.startsWith('/agent'),
                     onTap: () => _go(context, '/agent'),
                   ),
-                  if (chrome?.conversationId != null) ...[
-                    _section(context, 'این گفتگو'),
-                    if (chrome?.onRename != null)
-                      _row(
-                        context,
-                        icon: Icons.drive_file_rename_outline_rounded,
-                        label: 'تغییر نام',
-                        onTap: () {
-                          Navigator.pop(context);
-                          chrome!.onRename!();
-                        },
-                      ),
-                    if (chrome?.onShare != null)
-                      _row(
-                        context,
-                        icon: Icons.ios_share_rounded,
-                        label: 'اشتراک',
-                        onTap: () {
-                          Navigator.pop(context);
-                          chrome!.onShare!();
-                        },
-                      ),
-                    if (chrome?.onTemplates != null)
-                      _row(
-                        context,
-                        icon: Icons.article_outlined,
-                        label: 'قالب‌ها',
-                        onTap: () {
-                          Navigator.pop(context);
-                          chrome!.onTemplates!();
-                        },
-                      ),
-                    if (chrome?.onRegenerate != null)
-                      _row(
-                        context,
-                        icon: Icons.refresh_rounded,
-                        label: 'بازتولید پاسخ',
-                        onTap: () {
-                          Navigator.pop(context);
-                          chrome!.onRegenerate!();
-                        },
-                      ),
-                    if (chrome?.onPin != null)
-                      _row(
-                        context,
-                        icon: Icons.push_pin_outlined,
-                        label: 'سنجاق',
-                        onTap: () {
-                          Navigator.pop(context);
-                          chrome!.onPin!();
-                        },
-                      ),
-                    if (chrome?.onArchive != null)
-                      _row(
-                        context,
-                        icon: Icons.archive_outlined,
-                        label: 'بایگانی',
-                        onTap: () {
-                          Navigator.pop(context);
-                          chrome!.onArchive!();
-                        },
-                      ),
-                    if (chrome?.onDelete != null)
-                      _row(
-                        context,
-                        icon: Icons.delete_outline_rounded,
-                        label: 'حذف گفتگو',
-                        onTap: () {
-                          Navigator.pop(context);
-                          chrome!.onDelete!();
-                        },
-                      ),
-                  ],
                   _section(context, 'شروع سریع'),
                   _row(
                     context,
@@ -342,27 +444,30 @@ class PigptDrawer extends ConsumerWidget {
                     active: loc.contains('studio-media'),
                     onTap: () => _go(context, '/studios/studio-media'),
                   ),
-                  _section(context, 'حساب'),
+                  _section(context, 'ابزار'),
                   _row(
                     context,
-                    icon: Icons.account_balance_wallet_outlined,
-                    label: 'پلن و کیف',
-                    active: loc.startsWith('/account/plans'),
-                    onTap: () => _go(context, '/account/plans'),
+                    icon: Icons.auto_awesome_rounded,
+                    label: 'مدل‌ها',
+                    active: loc == '/models' || loc.startsWith('/models'),
+                    onTap: () => _go(context, '/models'),
                   ),
                   _row(
                     context,
-                    icon: Icons.receipt_long_outlined,
-                    label: 'فاکتورها',
-                    active: loc.startsWith('/account/invoices'),
-                    onTap: () => _go(context, '/account/invoices'),
+                    icon: Icons.search_rounded,
+                    label: 'جستجو',
+                    onTap: () {
+                      Navigator.pop(context);
+                      showPigptCommandPalette(context, ref);
+                    },
                   ),
                   _row(
                     context,
-                    icon: Icons.bar_chart_rounded,
-                    label: 'مصرف',
-                    active: loc.startsWith('/account/usage'),
-                    onTap: () => _go(context, '/account/usage'),
+                    icon: Icons.terminal_rounded,
+                    label: 'برنامه‌نویسی / PiCode',
+                    active: loc.startsWith('/account/picode') ||
+                        loc.startsWith('/app/cli'),
+                    onTap: () => _go(context, '/account/picode'),
                   ),
                   _row(
                     context,
@@ -373,40 +478,14 @@ class PigptDrawer extends ConsumerWidget {
                   ),
                   _row(
                     context,
-                    icon: Icons.support_agent_rounded,
-                    label: 'پشتیبانی',
-                    active: loc.startsWith('/account/support'),
-                    onTap: () => _go(context, '/account/support'),
-                  ),
-                  _row(
-                    context,
-                    icon: Icons.card_giftcard_rounded,
-                    label: 'ارجاع',
-                    active: loc.startsWith('/account/referral'),
-                    onTap: () => _go(context, '/account/referral'),
-                  ),
-                  _row(
-                    context,
-                    icon: Icons.terminal_rounded,
-                    label: 'راهنمای PiCode',
-                    active: loc.startsWith('/account/picode'),
-                    onTap: () => _go(context, '/account/picode'),
-                  ),
-                  _row(
-                    context,
-                    icon: Icons.info_outline_rounded,
-                    label: 'درباره',
-                    active: loc.startsWith('/account/about'),
-                    onTap: () => _go(context, '/account/about'),
-                  ),
-                  _row(
-                    context,
-                    icon: Icons.logout_rounded,
-                    label: 'خروج',
+                    icon: Icons.menu_book_outlined,
+                    label: 'بلاگ',
                     onTap: () async {
                       Navigator.pop(context);
-                      await ref.read(authControllerProvider.notifier).logout();
-                      if (context.mounted) context.go('/auth');
+                      await launchUrl(
+                        Uri.parse('${PigptBrand.webUrl}/blog'),
+                        mode: LaunchMode.externalApplication,
+                      );
                     },
                   ),
                 ],
@@ -429,7 +508,7 @@ class PigptDrawer extends ConsumerWidget {
       child: Text(
         label,
         style: TextStyle(
-          fontSize: 10.5,
+          fontSize: 11.5,
           fontWeight: FontWeight.w800,
           letterSpacing: 0.2,
           color: PigptColors.faintOf(context),
@@ -450,7 +529,7 @@ class PigptDrawer extends ConsumerWidget {
     final muted = PigptColors.mutedOf(context);
     final ink = PigptColors.inkOf(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 0.5),
+      padding: const EdgeInsets.symmetric(vertical: 1),
       child: Material(
         color: active
             ? brand.withValues(alpha: 0.12)
@@ -460,19 +539,19 @@ class PigptDrawer extends ConsumerWidget {
           borderRadius: BorderRadius.circular(8),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             child: Row(
               children: [
-                Icon(icon, size: 16, color: active ? brand : muted),
-                const SizedBox(width: 8),
+                Icon(icon, size: 20, color: active ? brand : muted),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 12.5,
-                      height: 1.15,
+                      fontSize: 14,
+                      height: 1.2,
                       fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                       color: active ? ink : muted,
                     ),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'api_client.dart';
 import 'api_paths.dart';
+import 'drafts.dart';
 import 'models.dart';
 import 'token_store.dart';
 
@@ -12,9 +13,12 @@ final authRefreshProvider = StateProvider<int>((ref) => 0);
 
 final planLockedMessageProvider = StateProvider<String?>((ref) => null);
 
+/// OAuth deep-link error (`error` / `error_description`) for AuthScreen.
+final oauthErrorProvider = StateProvider<String?>((ref) => null);
+
 final apiClientProvider = Provider<ApiClient>((ref) {
   final store = ref.watch(tokenStoreProvider);
-  return ApiClient(
+  final client = ApiClient(
     tokenStore: store,
     onUnauthorized: () {
       ref.read(authRefreshProvider.notifier).state++;
@@ -23,6 +27,8 @@ final apiClientProvider = Provider<ApiClient>((ref) {
       ref.read(planLockedMessageProvider.notifier).state = msg;
     },
   );
+  ComposerDrafts.bindApi(client);
+  return client;
 });
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.dark);
@@ -35,6 +41,9 @@ final speechOutputEnabledProvider = StateProvider<bool>((ref) => true);
 
 /// Whether composer mic / STT is enabled (from settings.speech.voice_input).
 final speechInputEnabledProvider = StateProvider<bool>((ref) => false);
+
+/// Whether markdown code blocks are formatted (from settings.show_code_blocks).
+final showCodeBlocksProvider = StateProvider<bool>((ref) => true);
 
 enum AuthStatus { unknown, signedOut, signedIn, needsVerification }
 
@@ -127,6 +136,8 @@ class AuthController extends StateNotifier<AuthState> {
         _ref.read(speechInputEnabledProvider.notifier).state =
             speech['voice_input'] == true;
       }
+      _ref.read(showCodeBlocksProvider.notifier).state =
+          settings['show_code_blocks'] != false;
     } catch (_) {}
   }
 

@@ -3,16 +3,19 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
 import '../../core/brand.dart';
+import '../../core/live_status.dart';
 import '../../core/media_io.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/app_chrome.dart';
 import '../../shared/widgets/fullscreen_image.dart';
+import '../../shared/widgets/live_status_line.dart';
 import '../../shared/widgets/ui.dart';
 
 class ImageStudioScreen extends ConsumerStatefulWidget {
@@ -40,6 +43,7 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
   String? _revisedPrompt;
   int _batchCount = 3;
   Timer? _poll;
+  LiveStatus _live = const LiveStatus();
 
   @override
   void initState() {
@@ -89,12 +93,8 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
       setState(() {
         _error = e.message;
         _loadingPresets = false;
-        _presets = [
-          ImagePreset(id: 'poster', name: 'پوستر'),
-          ImagePreset(id: 'product', name: 'محصول'),
-          ImagePreset(id: 'social', name: 'شبکه اجتماعی'),
-        ];
-        _presetId = 'poster';
+        _presets = const [];
+        _presetId = null;
       });
     }
   }
@@ -125,10 +125,29 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       if (!mounted) return;
-      setState(() => _jobs = jobs);
       final pending = jobs.any((j) {
         final s = '${j['status']}';
         return s == 'queued' || s == 'running';
+      });
+      LiveStatus nextLive = _live;
+      if (pending && _live.phase != LivePhase.error) {
+        final first = jobs.firstWhere(
+          (j) {
+            final s = '${j['status']}';
+            return s == 'queued' || s == 'running';
+          },
+          orElse: () => const <String, dynamic>{},
+        );
+        final st = '${first['status']}';
+        final pct = realPercentOf(first['progress'] ?? first['percent']);
+        nextLive = LiveStatus(
+          phase: st == 'queued' ? LivePhase.queued : LivePhase.generating,
+          percent: pct,
+        );
+      }
+      setState(() {
+        _jobs = jobs;
+        _live = nextLive;
       });
       _poll?.cancel();
       if (pending) {
@@ -159,6 +178,7 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
       _busy = true;
       _error = null;
       _msg = null;
+      _live = const LiveStatus(phase: LivePhase.queued);
     });
     try {
       final data = await ref.read(apiClientProvider).post<Map<String, dynamic>>(
@@ -173,7 +193,10 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
       await _loadJobs();
       await ref.read(authControllerProvider.notifier).refreshMe();
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      setState(() {
+        _error = e.message;
+        _live = LiveStatus(phase: LivePhase.error, errorFa: e.message);
+      });
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -185,7 +208,8 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
     setState(() {
       _busy = true;
       _error = null;
-      _msg = 'واریانت‌ها در صف…';
+      _msg = null;
+      _live = const LiveStatus(phase: LivePhase.queued);
     });
     try {
       await ref.read(apiClientProvider).post(
@@ -272,11 +296,13 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
       } else if (text.isNotEmpty && text != '{}') {
         _resultText = text;
       } else if (status == 'queued' || status == 'running') {
-        _msg = 'در صف تولید — همین صفحه به‌روز می‌شود.';
+        _live = LiveStatus(
+          phase: status == 'queued' ? LivePhase.queued : LivePhase.generating,
+        );
       }
       if (revised.isNotEmpty) _revisedPrompt = revised;
-      if (_msg == null && (_resultUrl != null || _resultText != null)) {
-        _msg = PigptBrand.readyWith;
+      if (_resultUrl != null || _resultText != null) {
+        _live = const LiveStatus(phase: LivePhase.ready);
       }
     });
   }
@@ -295,36 +321,42 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       const SectionHeader(
-                        title: 'بریف تصویر',
-                        subtitle: 'قالب، پرامپت، سپس تولید یا بچ.',
+                        title: 'پرامپت تصویر',
+                        subtitle: 'مثل گفتگو بنویسید؛ سپس تصویر بسازید',
                       ),
                       const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: _presets.map((p) {
-                          return ChoiceChip(
-                            label: Text(p.name),
-                            selected: p.id == _presetId,
-                            onSelected: (_) => setState(() => _presetId = p.id),
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 12),
+                      if (_presets.isNotEmpty) ...[
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: _presets.map((p) {
+                            return ChoiceChip(
+                              label: Text(p.name),
+                              selected: p.id == _presetId,
+                              onSelected: (_) =>
+                                  setState(() => _presetId = p.id),
+                            );
+                          }).toList(),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       TextField(
                         controller: _prompt,
-                        minLines: 3,
-                        maxLines: 6,
+                        minLines: 4,
+                        maxLines: 8,
+                        textInputAction: TextInputAction.newline,
                         decoration: const InputDecoration(
-                          labelText: 'پرامپت تولید',
+                          hintText: 'توضیح تصویر را بنویسید…',
+                          alignLabelWithHint: true,
                         ),
                       ),
                       const SizedBox(height: 12),
                       FilledButton.icon(
                         onPressed: _busy ? null : _generate,
                         icon: const Icon(Icons.auto_awesome),
-                        label: Text(_busy ? 'در صف…' : 'ساخت تصویر'),
+                        label: const Text('ساخت تصویر'),
                       ),
+                      LiveStatusLine(status: _live),
                       const SizedBox(height: 8),
                       Row(
                         children: [
@@ -345,6 +377,14 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
                             child: const Text('بچ'),
                           ),
                         ],
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () => context.push('/studios/gallery'),
+                          icon: const Icon(Icons.photo_library_outlined),
+                          label: const Text('گالری تصاویر'),
+                        ),
                       ),
                     ],
                   ),
@@ -417,7 +457,13 @@ class _ImageStudioScreenState extends ConsumerState<ImageStudioScreen> {
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 3),
                             child: Text(
-                              '${j['status'] ?? '—'} · ${j['id'] ?? ''}',
+                              () {
+                                final st = '${j['status'] ?? ''}';
+                                final p = livePhaseFromJobStatus(st);
+                                return p != null
+                                    ? LiveStatus(phase: p).label
+                                    : (st.isEmpty ? '—' : st);
+                              }(),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(

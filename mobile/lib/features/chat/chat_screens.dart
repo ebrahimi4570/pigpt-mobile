@@ -13,6 +13,8 @@ import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
 import '../../core/brand.dart';
 import '../../core/drafts.dart';
+import '../../core/jalali.dart';
+import '../../core/live_status.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/speech.dart';
@@ -21,6 +23,8 @@ import '../../core/theme.dart';
 import '../../core/voice_input.dart';
 import '../../shared/widgets/app_chrome.dart';
 import '../../shared/widgets/fullscreen_image.dart';
+import '../../shared/widgets/live_status_line.dart';
+import '../../shared/widgets/pigpt_composer.dart';
 import '../../shared/widgets/pigpt_markdown.dart';
 import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
@@ -59,8 +63,9 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
             child: WalletBanner(
               canGenerate: me?.canGenerate ?? true,
               balance: me?.balance,
-              dailyRemaining: me?.dailyTokensRemaining ?? me?.freeDailyRemaining,
-              dailyCap: me?.freeDailyCap,
+              dailyRemaining:
+                  me?.spendableToday ?? me?.dailyTokensRemaining,
+              dailyUnlimited: me?.dailyUnlimited ?? false,
               onTopUp: () => context.push('/account/plans'),
             ),
           ).animate().fadeIn(duration: 300.ms).slideY(begin: 0.06, end: 0),
@@ -141,7 +146,7 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
                       final c = filtered[i];
                       return SoftCard(
                         dense: true,
-                        onTap: () => context.push('/chat/${c.id}'),
+                        onTap: () => context.go('/chat/${c.id}'),
                         child: Row(
                           children: [
                             CircleAvatar(
@@ -180,6 +185,14 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
                                       ),
                                     ],
                                   ),
+                                  if (c.updatedAt != null)
+                                    Text(
+                                      JalaliFmt.format(c.updatedAt),
+                                      style: const TextStyle(
+                                        color: PigptColors.inkFaint,
+                                        fontSize: 11,
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
@@ -201,16 +214,65 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
                                     );
                                   } else if (v == 'pin') {
                                     await api.patch(
-                                      ApiPaths.conversation(c.id),
+                                      ApiPaths.conversationOrganize(c.id),
                                       data: {
                                         'is_pinned': !c.pinned,
-                                        'pinned': !c.pinned,
                                       },
                                     );
                                   } else if (v == 'archive') {
                                     await api.patch(
                                       ApiPaths.conversation(c.id),
                                       data: {'archived': !_archived},
+                                    );
+                                  } else if (v == 'folder') {
+                                    final folders = await api.get<dynamic>(
+                                        ApiPaths.conversationFolders);
+                                    final list = folders is List
+                                        ? folders
+                                        : (folders is Map
+                                            ? (folders['items'] ??
+                                                    folders['folders'] ??
+                                                    []) as List
+                                            : []);
+                                    if (!context.mounted) return;
+                                    final picked =
+                                        await showModalBottomSheet<String>(
+                                      context: context,
+                                      showDragHandle: true,
+                                      builder: (ctx) => SafeArea(
+                                        child: ListView(
+                                          shrinkWrap: true,
+                                          children: [
+                                            const ListTile(
+                                                title: Text('پوشه گفتگو')),
+                                            ListTile(
+                                              title: const Text('بدون پوشه'),
+                                              onTap: () =>
+                                                  Navigator.pop(ctx, ''),
+                                            ),
+                                            ...list.whereType<Map>().map((raw) {
+                                              final m =
+                                                  Map<String, dynamic>.from(raw);
+                                              final id = '${m['id'] ?? ''}';
+                                              final name =
+                                                  '${m['name_fa'] ?? m['name'] ?? id}';
+                                              return ListTile(
+                                                title: Text(name),
+                                                onTap: () =>
+                                                    Navigator.pop(ctx, id),
+                                              );
+                                            }),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                    if (picked == null) return;
+                                    await api.patch(
+                                      ApiPaths.conversationOrganize(c.id),
+                                      data: {
+                                        'folder_id':
+                                            picked.isEmpty ? null : picked,
+                                      },
                                     );
                                   } else if (v == 'delete') {
                                     await api.delete(ApiPaths.conversation(c.id));
@@ -240,6 +302,10 @@ class _ChatListScreenState extends ConsumerState<ChatListScreen> {
                                   child: Text(_archived
                                       ? 'بازگردانی'
                                       : 'بایگانی'),
+                                ),
+                                const PopupMenuItem(
+                                  value: 'folder',
+                                  child: Text('پوشه'),
                                 ),
                                 const PopupMenuItem(
                                   value: 'delete',
@@ -284,13 +350,13 @@ class ChatThreadScreen extends ConsumerStatefulWidget {
 class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
-  final _lastUserKey = GlobalKey();
-  final _streamEndKey = GlobalKey();
   late List<String> _starters;
   late final DraftSaver _drafts;
   VoiceInputService? _voice;
   bool _listening = false;
   bool _micBusy = false;
+  /// Stick to latest messages while streaming (web-like). User scroll-up disables.
+  bool _stickToBottom = true;
 
   ChatSessionKey get _sessionKey {
     final id = widget.conversationId == 'new' ? null : widget.conversationId;
@@ -324,101 +390,44 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
 
   double _maxBeforePrepend = 0;
   double _pixelsBeforePrepend = 0;
-  double _turnSpacer = 0;
-  bool _keepTurnSpacer = false;
+
+  void _sendAndFollow(ChatSessionController ctrl, String text) {
+    _stickToBottom = true;
+    ctrl.send(text);
+    _scrollToLatest();
+  }
 
   void _onChatScroll() {
     if (!_scroll.hasClients) return;
-    if (_scroll.offset > 80) return;
+    final max = _scroll.position.maxScrollExtent;
+    final pos = _scroll.offset;
+    // User scrolled away from bottom → stop auto-follow during stream.
+    _stickToBottom = (max - pos) < 140;
+
+    if (pos > 80) return;
     final key = _sessionKey;
     final session = ref.read(chatSessionProvider(key));
     if (!session.hasOlder || session.loadingOlder || session.streaming) return;
-    _maxBeforePrepend = _scroll.position.maxScrollExtent;
-    _pixelsBeforePrepend = _scroll.offset;
+    _maxBeforePrepend = max;
+    _pixelsBeforePrepend = pos;
     ref.read(chatSessionProvider(key).notifier).loadOlder();
   }
 
   void _scrollToLatest() {
-    _keepTurnSpacer = false;
-    if (_turnSpacer != 0 && mounted) setState(() => _turnSpacer = 0);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
-      _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      final max = _scroll.position.maxScrollExtent;
+      if ((max - _scroll.offset).abs() < 1) return;
+      _scroll.jumpTo(max);
     });
   }
 
-  RenderBox? _boxOf(GlobalKey key) {
-    final ctx = key.currentContext;
-    if (ctx == null) return null;
-    final box = ctx.findRenderObject();
-    return box is RenderBox && box.hasSize ? box : null;
-  }
-
-  RenderBox? _scrollBox() {
-    if (!_scroll.hasClients) return null;
-    final box = _scroll.position.context.notificationContext?.findRenderObject() ??
-        _scroll.position.context.storageContext.findRenderObject();
-    return box is RenderBox && box.hasSize ? box : null;
-  }
-
-  void _jumpUserToTop() {
-    final user = _boxOf(_lastUserKey);
-    final view = _scrollBox();
-    if (user == null || view == null || !_scroll.hasClients) return;
-    final delta = user.localToGlobal(Offset.zero).dy - view.localToGlobal(Offset.zero).dy - 8;
-    final next =
-        (_scroll.offset + delta).clamp(0.0, _scroll.position.maxScrollExtent);
-    _scroll.jumpTo(next);
-  }
-
-  void _syncTurnSpacer({required bool pin}) {
+  void _preserveScrollOffset() {
+    if (!_scroll.hasClients) return;
+    final saved = _scroll.offset;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
-      final user = _boxOf(_lastUserKey);
-      if (user == null) {
-        if (pin) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _syncTurnSpacer(pin: true);
-          });
-        }
-        return;
-      }
-      final next =
-          (_scroll.position.viewportDimension - user.size.height - 16)
-              .clamp(0.0, _scroll.position.viewportDimension);
-      void afterSpacer() {
-        if (!mounted) return;
-        if (pin) _jumpUserToTop();
-      }
-
-      if ((next - _turnSpacer).abs() > 1) {
-        setState(() => _turnSpacer = next);
-        WidgetsBinding.instance.addPostFrameCallback((_) => afterSpacer());
-      } else {
-        afterSpacer();
-      }
-    });
-  }
-
-  void _pinLastUserToTop() {
-    _keepTurnSpacer = true;
-    _syncTurnSpacer(pin: true);
-  }
-
-  void _followTypingIfClipped() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scroll.hasClients) return;
-      final endBox = _boxOf(_streamEndKey);
-      final view = _scrollBox();
-      if (endBox == null || view == null) return;
-      final caretBottom = endBox.localToGlobal(Offset(0, endBox.size.height)).dy;
-      final viewBottom = view.localToGlobal(Offset(0, view.size.height)).dy;
-      final overflow = caretBottom - viewBottom + 16;
-      if (overflow > 6) {
-        final next = (_scroll.offset + overflow)
-            .clamp(0.0, _scroll.position.maxScrollExtent);
-        _scroll.jumpTo(next);
-      }
+      _scroll.jumpTo(saved.clamp(0.0, _scroll.position.maxScrollExtent));
     });
   }
 
@@ -454,9 +463,14 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
             ...models.map(
               (m) => ListTile(
                 title: Text(m.name),
-                subtitle: m.vendor != null ? Text(m.vendor!) : null,
-                selected: m.id == s.modelId,
-                onTap: () => Navigator.pop(ctx, m.id),
+                subtitle: Text(
+                  m.enabled
+                      ? (m.vendor ?? '')
+                      : (m.reasonFa ?? m.reason ?? 'غیرفعال'),
+                ),
+                enabled: m.enabled,
+                selected: m.enabled && m.id == s.modelId,
+                onTap: m.enabled ? () => Navigator.pop(ctx, m.id) : null,
               ),
             ),
           ],
@@ -570,7 +584,17 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
           _listening = false;
           _micBusy = false;
         });
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e)));
+        // One-shot permission/setup errors stay as snackbar; stream errors use the status line.
+        if (e.contains('اجازه') || e.contains('تنظیمات')) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e)));
+        }
+      },
+      onPhase: (p) {
+        if (!mounted) return;
+        setState(() {
+          _listening = p == 'listening';
+          _micBusy = p == 'transcribing';
+        });
       },
     );
     if (!mounted) return;
@@ -578,6 +602,17 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       _listening = _voice?.listening ?? false;
       _micBusy = _voice?.busy ?? false;
     });
+  }
+
+  LiveStatus _composedLive(ChatSessionState session) {
+    if (_listening) return const LiveStatus(phase: LivePhase.listening);
+    if (_micBusy) return const LiveStatus(phase: LivePhase.transcribing);
+    if (session.livePhase == LivePhase.error &&
+        (session.liveError == null || session.liveError!.isEmpty) &&
+        session.error != null) {
+      return LiveStatus(phase: LivePhase.error, errorFa: session.error);
+    }
+    return session.liveStatus;
   }
 
   void _bindChrome(ChatSessionController ctrl, ChatSessionState session) {
@@ -612,12 +647,11 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
           : () async {
               await ctrl.archive(archived: true);
               if (!mounted) return;
-              if (widget.isHome) {
-                ctrl.startFresh();
-                _input.clear();
-              } else {
-                context.go('/chat');
-              }
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('گفتگو بایگانی شد — می‌توانید ادامه دهید'),
+                ),
+              );
             },
       onDelete: session.conversationId == null
           ? null
@@ -649,9 +683,9 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                       const ListTile(title: Text('قالب‌های گفتگو')),
                       ...templates.map((t) {
                         final title =
-                            '${t['title'] ?? t['title_fa'] ?? t['name'] ?? 'قالب'}';
+                            '${t['title_fa'] ?? t['title'] ?? t['name'] ?? 'قالب'}';
                         final body =
-                            '${t['prompt'] ?? t['content'] ?? t['body'] ?? ''}';
+                            '${t['prompt_fa'] ?? t['prompt'] ?? t['content'] ?? t['body'] ?? ''}';
                         return ListTile(
                           title: Text(title),
                           subtitle: body.isEmpty
@@ -667,8 +701,12 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                   ),
           ),
         );
-        if (picked != null && picked.isNotEmpty) {
-          _input.text = picked;
+        if (picked != null && picked.isNotEmpty && mounted) {
+          setState(() {
+            _input.text = picked;
+            _input.selection =
+                TextSelection.collapsed(offset: picked.length);
+          });
         }
       },
       onRegenerate: session.streaming ? null : ctrl.regenerate,
@@ -721,9 +759,7 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
     ref.listen<ChatSessionState>(chatSessionProvider(key), (prev, next) {
       final wasStreaming = prev?.streaming ?? false;
       final started = !wasStreaming && next.streaming;
-      final reloadedAfterStream = wasStreaming &&
-          !next.streaming &&
-          next.messages.isNotEmpty;
+      final finished = wasStreaming && !next.streaming;
       final idsReplaced = prev != null &&
           !next.streaming &&
           prev.messages.isNotEmpty &&
@@ -747,18 +783,45 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
         });
         return;
       }
-      if (started || reloadedAfterStream) {
-        _pinLastUserToTop();
-      } else if (initialLoad) {
+      if (started) {
+        _stickToBottom = true;
         _scrollToLatest();
-      } else if (idsReplaced && _keepTurnSpacer) {
-        _pinLastUserToTop();
-      } else if (next.streaming && _keepTurnSpacer) {
-        _followTypingIfClipped();
+      } else if (initialLoad) {
+        _stickToBottom = true;
+        _scrollToLatest();
+      } else if (idsReplaced) {
+        _preserveScrollOffset();
+      } else if (next.streaming && _stickToBottom) {
+        _scrollToLatest();
+      }
+
+      // Keep URL on the open conversation after the first reply from home,
+      // and never bounce an existing /chat/:id thread back to empty home.
+      if (finished &&
+          next.conversationId != null &&
+          next.conversationId!.isNotEmpty) {
+        final loc = GoRouterState.of(context).uri.path;
+        final target = '/chat/${next.conversationId}';
+        if (widget.isHome &&
+            (loc == '/chat' || loc == '/chat/new') &&
+            loc != target) {
+          context.go(target);
+        } else if (_hasConversationId(widget.conversationId) &&
+            !loc.startsWith('/chat/${widget.conversationId}')) {
+          context.go('/chat/${widget.conversationId}');
+        }
       }
     });
 
     _bindChrome(ctrl, session);
+
+    final live = _composedLive(session);
+    final dailyLeft = me?.spendableToday ?? me?.dailyTokensRemaining;
+    final nearDailyCap = (me?.canGenerate ?? true) &&
+        !(me?.dailyUnlimited ?? false) &&
+        dailyLeft != null &&
+        dailyLeft < 10000;
+    final showWallet = !(me?.canGenerate ?? true) || nearDailyCap;
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
@@ -777,45 +840,59 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'chat', label: Text('گفتگو')),
-                      ButtonSegment(value: 'agent', label: Text('ایجنت')),
-                    ],
-                    selected: {session.mode},
-                    onSelectionChanged: (s) => ctrl.setMode(s.first),
-                  ),
-                ),
-              ],
-            ),
-          ).animate().fadeIn(duration: 240.ms).slideY(begin: 0.05, end: 0),
-          if (!(me?.canGenerate ?? true))
+          if (showWallet)
             Padding(
               padding: const EdgeInsets.all(12),
               child: WalletBanner(
-                canGenerate: false,
+                canGenerate: me?.canGenerate ?? true,
                 balance: me?.balance,
-                dailyRemaining: me?.dailyTokensRemaining,
+                dailyRemaining: dailyLeft,
+                dailyUnlimited: me?.dailyUnlimited ?? false,
+                nearCap: nearDailyCap,
                 onTopUp: () => context.push('/account/plans'),
+              ),
+            ),
+          if (!widget.isHome)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(
+                      value: 'chat',
+                      label: Text('گفتگو'),
+                      icon: Icon(Icons.chat_bubble_outline, size: 16)),
+                  ButtonSegment(
+                      value: 'agent',
+                      label: Text('ایجنت'),
+                      icon: Icon(Icons.smart_toy_outlined, size: 16)),
+                ],
+                selected: {session.mode == 'agent' ? 'agent' : 'chat'},
+                onSelectionChanged: (s) {
+                  if (session.streaming) return;
+                  ctrl.setMode(s.first);
+                },
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
               ),
             ),
           if (session.loadingOlder)
             const LinearProgressIndicator(minHeight: 2),
           Expanded(
-            child: session.messages.isEmpty
-                ? _EmptyChat(
-                    starters: _starters,
-                    onPick: (t) {
-                      HapticFeedback.selectionClick();
-                      _input.text = t;
-                      ctrl.send(t);
-                    },
-                  )
+            child: _hasConversationId(widget.conversationId) && session.loading
+                ? const ChatThreadShimmer()
+                : session.messages.isEmpty
+                ? (_hasConversationId(widget.conversationId)
+                    ? const SizedBox.shrink()
+                    : _EmptyChat(
+                        starters: _starters,
+                        onPick: (t) {
+                          HapticFeedback.selectionClick();
+                          _input.text = t;
+                          _sendAndFollow(ctrl, t);
+                        },
+                      ))
                 : ListView.builder(
                     controller: _scroll,
                     keyboardDismissBehavior:
@@ -826,23 +903,21 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                       12,
                       24 + MediaQuery.paddingOf(context).bottom,
                     ),
-                    itemCount: session.messages.length + 1,
+                    itemCount: session.messages.length,
                     itemBuilder: (context, i) {
-                      if (i >= session.messages.length) {
-                        return SizedBox(height: _keepTurnSpacer ? _turnSpacer : 0);
-                      }
                       final m = session.messages[i];
-                      final lastUserIdx = session.messages
-                          .lastIndexWhere((x) => x.role == 'user');
+                      if (m.role == 'assistant' &&
+                          m.streaming &&
+                          m.content.trim().isEmpty &&
+                          (m.errorFa == null || m.errorFa!.trim().isEmpty)) {
+                        return const SizedBox.shrink();
+                      }
                       final lastAsstIdx = session.messages
                           .lastIndexWhere((x) => x.role == 'assistant');
                       return KeyedSubtree(
-                        key: ValueKey(m.id),
+                        key: ValueKey(m.layoutKey),
                         child: _MessageBubble(
                           message: m,
-                          anchorKey: i == lastUserIdx
-                              ? _lastUserKey
-                              : (m.streaming ? _streamEndKey : null),
                           canEdit: m.role == 'user' &&
                               !session.streaming &&
                               !m.id.startsWith('local-'),
@@ -850,57 +925,45 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
                           onRegenerate: m.role == 'assistant' &&
                                   i == lastAsstIdx &&
                                   !session.streaming
-                              ? () => ctrl.regenerate()
+                              ? () {
+                                  _stickToBottom = true;
+                                  ctrl.regenerate();
+                                  _scrollToLatest();
+                                }
                               : null,
                         ),
                       );
                     },
                   ),
           ),
-          if (session.error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                session.error!,
-                style: const TextStyle(color: PigptColors.danger),
-              ),
-            ),
-          if (session.pending != null || session.uploading)
+          if (session.pending != null && !session.uploading)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
               child: Row(
                 children: [
-                  if (session.uploading)
-                    const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                  if (_isImageName(session.pending!.name) ||
+                      (session.pending!.localPath != null &&
+                          _isImageName(session.pending!.localPath!)))
+                    _ChatImageThumb(
+                      filePath: session.pending!.localPath,
+                      assetId: session.pending!.id,
+                      size: 48,
                     )
-                  else ...[
-                    if (_isImageName(session.pending!.name) ||
-                        (session.pending!.localPath != null &&
-                            _isImageName(session.pending!.localPath!)))
-                      _ChatImageThumb(
-                        filePath: session.pending!.localPath,
-                        assetId: session.pending!.id,
-                        size: 48,
-                      )
-                    else
-                      Flexible(
-                        child: Text(
-                          session.pending!.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12),
-                        ),
+                  else
+                    Flexible(
+                      child: Text(
+                        session.pending!.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
                       ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      tooltip: 'حذف پیوست',
-                      onPressed: ctrl.clearPending,
-                      icon: const Icon(Icons.close_rounded, size: 18),
                     ),
-                  ],
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'حذف پیوست',
+                    onPressed: ctrl.clearPending,
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                  ),
                 ],
               ),
             ),
@@ -925,155 +988,58 @@ class _ChatThreadScreenState extends ConsumerState<ChatThreadScreen> {
           SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
+              key: const ValueKey('composer-dock'),
+              padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  IconButton(
-                    tooltip: 'پیوست فایل یا تصویر',
-                    onPressed: session.streaming || session.uploading
-                        ? null
-                        : () => _pickAttachment(ctrl),
-                    icon: const Icon(Icons.attach_file_rounded),
-                  ),
-                  if (ref.watch(speechInputEnabledProvider))
-                    IconButton(
-                      tooltip: _listening ? 'توقف ضبط' : 'ورودی صوتی',
-                      onPressed: session.streaming || _micBusy
-                          ? null
-                          : _toggleMic,
-                      icon: Icon(
-                        _listening
-                            ? Icons.stop_circle_outlined
-                            : Icons.mic_none_rounded,
-                        color: _listening ? PigptColors.danger : null,
-                      ),
-                    ),
-                  Expanded(
-                    child: TextField(
-                      controller: _input,
-                      minLines: 1,
-                      maxLines: 5,
-                      decoration: InputDecoration(
-                        hintText: session.mode == 'agent'
-                            ? 'هدف ایجنت را بنویسید…'
-                            : 'پیام خود را بنویسید…',
-                      ),
-                      onSubmitted: (_) {
-                        if (session.isFull) return;
-                        final t = _input.text;
-                        _input.clear();
-                        ComposerDrafts.clear(session.conversationId);
-                        ctrl.send(t);
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _ComposerSendColumn(
+                  PigptComposer(
+                    controller: _input,
+                    hint: 'سوال خود را بنویسید',
+                    streaming: session.streaming,
+                    enabled: !session.isFull && !session.uploading,
+                    showMic: ref.watch(speechInputEnabledProvider),
+                    listening: _listening,
+                    micBusy: _micBusy,
+                    onMic: _toggleMic,
+                    onAttach: () => _pickAttachment(ctrl),
+                    showRing: session.messages.isNotEmpty,
                     fill: (() {
                       final cap = session.capTokens <= 0
                           ? kChatContextCapTokens
                           : session.capTokens;
-                      return ((session.fill * cap) +
-                              estimateTokens(_input.text))
-                          .clamp(0, cap) /
+                      return ((session.fill * cap) + estimateTokens(_input.text))
+                              .clamp(0, cap) /
                           cap;
                     })(),
-                    usedTokens: session.usedTokens +
-                        estimateTokens(_input.text),
+                    usedTokens:
+                        session.usedTokens + estimateTokens(_input.text),
                     capTokens: session.capTokens,
-                    streaming: session.streaming,
-                    enabled: !session.isFull,
                     onStop: ctrl.stop,
                     onSend: () {
-                      HapticFeedback.lightImpact();
                       final t = _input.text;
                       _input.clear();
                       ComposerDrafts.clear(session.conversationId);
-                      ctrl.send(t);
+                      _sendAndFollow(ctrl, t);
+                    },
+                    onSubmitted: () {
+                      if (session.isFull) return;
+                      final t = _input.text;
+                      _input.clear();
+                      ComposerDrafts.clear(session.conversationId);
+                      _sendAndFollow(ctrl, t);
                     },
                   ),
+                  LiveStatusLine(status: live, reserveSlot: true),
                 ],
               ),
             )
-                .animate()
+                .animate(key: const ValueKey('composer-dock-anim'))
                 .fadeIn(duration: 280.ms)
                 .slideY(begin: 0.12, end: 0, curve: Curves.easeOutCubic),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _ComposerSendColumn extends StatelessWidget {
-  const _ComposerSendColumn({
-    required this.fill,
-    required this.usedTokens,
-    required this.capTokens,
-    required this.streaming,
-    required this.enabled,
-    required this.onStop,
-    required this.onSend,
-  });
-
-  final double fill;
-  final int usedTokens;
-  final int capTokens;
-  final bool streaming;
-  final bool enabled;
-  final VoidCallback onStop;
-  final VoidCallback onSend;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (streaming)
-          IconButton.filled(
-            onPressed: onStop,
-            icon: const Icon(Icons.stop_rounded),
-          )
-        else
-          IconButton.filled(
-            onPressed: enabled ? onSend : null,
-            icon: const Icon(Icons.send_rounded),
-          ),
-        const SizedBox(height: 4),
-        _ChatVolumeRing(fill: fill, usedTokens: usedTokens, capTokens: capTokens),
-      ],
-    );
-  }
-}
-
-class _ChatVolumeRing extends StatelessWidget {
-  const _ChatVolumeRing({
-    required this.fill,
-    required this.usedTokens,
-    required this.capTokens,
-  });
-  final double fill;
-  final int usedTokens;
-  final int capTokens;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = fill.clamp(0.0, 1.0);
-    final hot = p >= 0.85;
-    final pct = (p * 100).round();
-    return Tooltip(
-      message:
-          'حجم این گفتگو $pct٪ · حدود $usedTokens از $capTokens توکن',
-      child: SizedBox(
-        width: 18,
-        height: 18,
-        child: CircularProgressIndicator(
-          value: p,
-          strokeWidth: 2.4,
-          backgroundColor: PigptColors.border,
-          color: hot ? const Color(0xFFF59E0B) : PigptColors.brand,
-        ),
       ),
     );
   }
@@ -1086,65 +1052,75 @@ class _EmptyChat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      children: [
-        Center(child: const PigptMark(size: 64))
-            .animate()
-            .fadeIn(duration: 420.ms)
-            .scale(begin: const Offset(0.88, 0.88), curve: Curves.easeOutBack)
-            .then(delay: 200.ms)
-            .shimmer(duration: 1400.ms, color: PigptColors.brandSoft),
-        const SizedBox(height: 12),
-        Text(
-          'از کجا شروع کنیم؟',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
-        ).animate().fadeIn(delay: 80.ms).slideY(begin: 0.08, end: 0),
-        const SizedBox(height: 4),
-        Text(
-          'پیشنهادها هر بار عوض می‌شوند — بدون پخش خودکار صدا.',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: PigptColors.inkMuted,
-              ),
-        ).animate().fadeIn(delay: 120.ms),
-        const SizedBox(height: 10),
-        ...starters.asMap().entries.map((e) {
-          return InkWell(
-            borderRadius: BorderRadius.circular(10),
-            onTap: () => onPick(e.value),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.auto_awesome_outlined,
-                    size: 16,
-                    color: PigptColors.brand.withValues(alpha: 0.85),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      e.value,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            height: 1.45,
-                            color: PigptColors.ink,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Center(child: const PigptMark(size: 64))
+                    .animate()
+                    .fadeIn(duration: 420.ms)
+                    .scale(
+                        begin: const Offset(0.88, 0.88),
+                        curve: Curves.easeOutBack)
+                    .then(delay: 200.ms)
+                    .shimmer(
+                        duration: 1400.ms, color: PigptColors.brandSoft),
+                const SizedBox(height: 12),
+                Text(
+                  'سوال خود را بپرسید',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                ).animate().fadeIn(delay: 80.ms).slideY(begin: 0.08, end: 0),
+                const SizedBox(height: 10),
+                ...starters.asMap().entries.map((e) {
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: () => onPick(e.value),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 8, horizontal: 4),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.auto_awesome_outlined,
+                            size: 16,
+                            color: PigptColors.brand.withValues(alpha: 0.85),
                           ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              e.value,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(
+                                    height: 1.45,
+                                    color: PigptColors.ink,
+                                  ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  )
+                      .animate(delay: (50 * e.key).ms)
+                      .fadeIn(duration: 260.ms)
+                      .slideY(
+                          begin: 0.06, end: 0, curve: Curves.easeOutCubic);
+                }),
+              ],
             ),
-          )
-              .animate(delay: (50 * e.key).ms)
-              .fadeIn(duration: 260.ms)
-              .slideY(begin: 0.06, end: 0, curve: Curves.easeOutCubic);
-        }),
-      ],
+          ),
+        );
+      },
     );
   }
 }
@@ -1152,6 +1128,11 @@ class _EmptyChat extends StatelessWidget {
 final _uuidLike = RegExp(
   r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
 );
+
+bool _hasConversationId(String? id) {
+  final v = id?.trim() ?? '';
+  return v.isNotEmpty && v != 'new';
+}
 
 String _conversationTitle(String? title) {
   final t = title?.trim() ?? '';
@@ -1286,13 +1267,11 @@ String stripPoweredByFooter(String text) {
 class _MessageBubble extends ConsumerWidget {
   const _MessageBubble({
     required this.message,
-    this.anchorKey,
     this.canEdit = false,
     this.onEdit,
     this.onRegenerate,
   });
   final ChatMessage message;
-  final Key? anchorKey;
   final bool canEdit;
   final VoidCallback? onEdit;
   final VoidCallback? onRegenerate;
@@ -1309,7 +1288,7 @@ class _MessageBubble extends ConsumerWidget {
         (visible == 'تصویر پیوست شد' || visible == 'تصویر پیوست')) {
       visible = '';
     }
-    final mdSource = message.streaming ? visible.replaceAll(RegExp(r'\n+$'), '') : visible;
+    final mdSource = visible.replaceAll(RegExp(r'\n+$'), '');
     final emptyAssistant = !isUser &&
         !message.streaming &&
         visible.trim().isEmpty &&
@@ -1319,7 +1298,6 @@ class _MessageBubble extends ConsumerWidget {
           ? message.errorFa!
           : 'پاسخ دریافت نشد. اتصال قطع شد یا مدل جواب نداد. دوباره تلاش کنید.';
       return Align(
-        key: anchorKey,
         alignment: Alignment.centerRight,
         child: ConstrainedBox(
           constraints: BoxConstraints(
@@ -1360,7 +1338,6 @@ class _MessageBubble extends ConsumerWidget {
       );
     }
     return Align(
-      key: anchorKey,
       alignment: isUser ? Alignment.centerLeft : Alignment.centerRight,
       child: ConstrainedBox(
         constraints: BoxConstraints(
@@ -1392,21 +1369,12 @@ class _MessageBubble extends ConsumerWidget {
                     ? const SizedBox.shrink()
                     : SelectableText(visible)
               else if (mdSource.isEmpty && message.streaming)
-                const SizedBox(
-                  height: 22,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                )
+                const SizedBox.shrink()
               else
                 PigptMarkdown(
                   data: mdSource,
                   streaming: message.streaming,
+                  codeBlocks: ref.watch(showCodeBlocksProvider),
                 ),
               if (isUser && canEdit) ...[
                 const SizedBox(height: 4),
@@ -1569,40 +1537,156 @@ class _ChatImageThumb extends ConsumerWidget {
       );
 }
 
-class ModelsScreen extends ConsumerWidget {
+class ModelsScreen extends ConsumerStatefulWidget {
   const ModelsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ModelsScreen> createState() => _ModelsScreenState();
+}
+
+class _ModelsScreenState extends ConsumerState<ModelsScreen> {
+  Set<String> _enabled = {};
+  String? _defaultId;
+  bool _saving = false;
+  String? _msg;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPrefs();
+  }
+
+  Future<void> _loadPrefs() async {
+    try {
+      final data = await ref.read(apiClientProvider).get<Map<String, dynamic>>(
+            ApiPaths.meModelPrefs,
+            parser: (d) => Map<String, dynamic>.from(d as Map),
+          );
+      final enabled = data['enabled_model_ids'] ?? data['enabled'];
+      if (enabled is List) {
+        _enabled = enabled.map((e) => '$e').toSet();
+      }
+      _defaultId = data['default_model_id']?.toString();
+      if (mounted) setState(() {});
+    } catch (_) {}
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await ref.read(apiClientProvider).put(
+        ApiPaths.meModelPrefs,
+        data: {
+          'enabled_model_ids': _enabled.toList(),
+          if (_defaultId != null) 'default_model_id': _defaultId,
+        },
+      );
+      ref.invalidate(modelsProvider);
+      setState(() => _msg = 'ذخیره شد');
+    } on ApiException catch (e) {
+      setState(() => _msg = e.message);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final async = ref.watch(modelsProvider);
     return Scaffold(
       appBar: const PigptAppBar(title: 'مدل‌ها', showBack: true),
       body: async.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('$e')),
-        data: (models) => ListView.separated(
-          padding: const EdgeInsets.all(16),
-          itemCount: models.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, i) {
-            final m = models[i];
-            return SoftCard(
-              onTap: () => context.go('/chat/new', extra: m.id),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(m.name,
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                  if (m.description != null) ...[
-                    const SizedBox(height: 4),
-                    Text(m.description!,
-                        style: const TextStyle(color: PigptColors.inkMuted)),
-                  ],
-                ],
+        data: (models) {
+          final enabled = _enabled.isEmpty
+              ? {for (final m in models.where((e) => e.enabled)) m.id}
+              : _enabled;
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              if (_msg != null) ...[
+                SoftCard(child: Text(_msg!)),
+                const SizedBox(height: 10),
+              ],
+              const SectionHeader(
+                title: 'مدل‌های فعال',
+                subtitle: 'مدل‌های قابل‌استفاده بالا هستند',
               ),
-            );
-          },
-        ),
+              const SizedBox(height: 8),
+              ...models.map((m) {
+                final on = enabled.contains(m.id);
+                return SoftCard(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(m.name,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                          if (m.enabled)
+                            Switch(
+                              value: on,
+                              onChanged: (v) => setState(() {
+                                final next = {...enabled};
+                                if (v) {
+                                  next.add(m.id);
+                                } else {
+                                  next.remove(m.id);
+                                }
+                                _enabled = next;
+                              }),
+                            )
+                          else
+                            const PlanLockBadge(),
+                        ],
+                      ),
+                      if (m.description != null) ...[
+                        const SizedBox(height: 4),
+                        Text(m.description!,
+                            style: const TextStyle(
+                                color: PigptColors.inkMuted, fontSize: 12)),
+                      ],
+                      if (!m.enabled) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          m.reasonFa ?? m.reason ?? 'غیرفعال',
+                          style: const TextStyle(color: PigptColors.inkMuted),
+                        ),
+                      ] else ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            onPressed: () =>
+                                context.go('/chat/new', extra: m.id),
+                            child: const Text('شروع گفتگو با این مدل'),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              }),
+              const SizedBox(height: 8),
+              FilledButton(
+                onPressed: _saving
+                    ? null
+                    : () {
+                        if (_enabled.isEmpty) {
+                          setState(() => _enabled = enabled);
+                        }
+                        _save();
+                      },
+                child: Text(_saving ? '…' : 'ذخیره مدل‌ها'),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

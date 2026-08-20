@@ -316,6 +316,7 @@ lib/
 ### ۶.۷ کیفیت مهندسی
 
 - `flutter_lints` سخت؛ CI: analyze + test + build apk/ipa smoke
+- APK عمومی **فقط arm64** — هرگز fat/universal؛ دستور: `flutter build apk --release --target-platform android-arm64` (نگاه کنید به `docs/APK_BUILD.md`)
 - طلایی: golden برای Chat bubble و QuickStart card در دارک
 - نسخه‌گذاری اپ: SemVer؛ header اختیاری `X-PiGPT-Client: flutter/{version}`
 

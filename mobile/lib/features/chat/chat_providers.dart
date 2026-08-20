@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
+import '../../core/live_status.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import 'chat_limits.dart';
@@ -11,10 +14,15 @@ final modelsProvider = FutureProvider<List<AiModel>>((ref) async {
   final api = ref.watch(apiClientProvider);
   final data = await api.get<dynamic>(ApiPaths.models);
   final list = _asList(data, keys: ['models', 'items', 'data']);
-  return list
+  final models = list
       .whereType<Map>()
       .map((e) => AiModel.fromJson(Map<String, dynamic>.from(e)))
       .toList();
+  models.sort((a, b) {
+    if (a.enabled != b.enabled) return a.enabled ? -1 : 1;
+    return a.name.compareTo(b.name);
+  });
+  return models;
 });
 
 final conversationsProvider =
@@ -84,8 +92,12 @@ class ChatSessionState {
     this.uploading = false,
     this.hasOlder = false,
     this.loadingOlder = false,
+    this.loading = false,
     this.usedTokens = 0,
     this.capTokens = kChatContextCapTokens,
+    this.livePhase = LivePhase.idle,
+    this.liveError,
+    this.livePercent,
   });
 
   final String? conversationId;
@@ -99,8 +111,18 @@ class ChatSessionState {
   final bool uploading;
   final bool hasOlder;
   final bool loadingOlder;
+  final bool loading;
   final int usedTokens;
   final int capTokens;
+  final LivePhase livePhase;
+  final String? liveError;
+  final int? livePercent;
+
+  LiveStatus get liveStatus => LiveStatus(
+        phase: livePhase,
+        errorFa: liveError,
+        percent: livePercent,
+      );
 
   double get fill {
     final cap = capTokens <= 0 ? kChatContextCapTokens : capTokens;
@@ -125,10 +147,16 @@ class ChatSessionState {
     bool? uploading,
     bool? hasOlder,
     bool? loadingOlder,
+    bool? loading,
     int? usedTokens,
     int? capTokens,
+    LivePhase? livePhase,
+    String? liveError,
+    int? livePercent,
     bool clearError = false,
     bool clearPending = false,
+    bool clearLiveError = false,
+    bool clearLivePercent = false,
   }) =>
       ChatSessionState(
         conversationId: conversationId ?? this.conversationId,
@@ -142,8 +170,12 @@ class ChatSessionState {
         uploading: uploading ?? this.uploading,
         hasOlder: hasOlder ?? this.hasOlder,
         loadingOlder: loadingOlder ?? this.loadingOlder,
+        loading: loading ?? this.loading,
         usedTokens: usedTokens ?? this.usedTokens,
         capTokens: capTokens ?? this.capTokens,
+        livePhase: livePhase ?? this.livePhase,
+        liveError: clearLiveError ? null : (liveError ?? this.liveError),
+        livePercent: clearLivePercent ? null : (livePercent ?? this.livePercent),
       );
 }
 
@@ -152,6 +184,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
       : super(ChatSessionState(
           conversationId: initialId,
           modelId: initialModelId,
+          loading: initialId != null,
         )) {
     if (initialId != null) {
       load(initialId!);
@@ -161,10 +194,88 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
   final Ref _ref;
   final String? initialId;
   CancelToken? _cancel;
+  Timer? _liveTimer;
+
+  @override
+  void dispose() {
+    _liveTimer?.cancel();
+    _cancel?.cancel();
+    super.dispose();
+  }
+
+  void _setLive(LivePhase phase, {String? error, int? percent}) {
+    _liveTimer?.cancel();
+    state = state.copyWith(
+      livePhase: phase,
+      liveError: error,
+      livePercent: percent,
+      clearLiveError: error == null,
+      clearLivePercent: percent == null,
+    );
+  }
+
+  void _beginStreamLive({required bool hasAttachment}) {
+    _setLive(hasAttachment ? LivePhase.reading : LivePhase.waiting);
+    _liveTimer = Timer(const Duration(milliseconds: 400), () {
+      if (!state.streaming) return;
+      if (state.messages.isEmpty) return;
+      final last = state.messages.last;
+      if (last.role == 'assistant' && last.content.trim().isEmpty) {
+        _setLive(LivePhase.thinking);
+      }
+    });
+  }
+
+  void _onStreamEvent(SseEvent event) {
+    if (event.event == 'token') {
+      if (state.livePhase == LivePhase.waiting ||
+          state.livePhase == LivePhase.thinking ||
+          state.livePhase == LivePhase.reading) {
+        _setLive(LivePhase.writing);
+      }
+      return;
+    }
+    final tool = livePhaseFromTool(event.data);
+    if (tool != null) _setLive(tool);
+  }
+
+  void _finishLiveOk() {
+    _setLive(LivePhase.done);
+    _liveTimer = Timer(const Duration(milliseconds: 900), () {
+      _setLive(LivePhase.ready);
+      _liveTimer = Timer(const Duration(milliseconds: 1400), () {
+        _setLive(LivePhase.idle);
+      });
+    });
+  }
+
+  void _finishLiveErr(String msg) {
+    _setLive(LivePhase.error, error: msg);
+  }
 
   ApiClient get _api => _ref.read(apiClientProvider);
 
+  /// Keep ListView identities when a reload swaps local-* ids for server ids.
+  List<ChatMessage> _preserveLayoutKeys(
+    List<ChatMessage> local,
+    List<ChatMessage> server,
+  ) {
+    if (local.isEmpty || server.isEmpty) return server;
+    final out = [...server];
+    var li = local.length - 1;
+    var si = out.length - 1;
+    while (li >= 0 && si >= 0 && local[li].role == out[si].role) {
+      out[si] = out[si].copyWith(layoutKey: local[li].layoutKey);
+      li--;
+      si--;
+    }
+    return out;
+  }
+
   Future<void> load(String id) async {
+    if (state.messages.isEmpty) {
+      state = state.copyWith(loading: true, conversationId: id, clearError: true);
+    }
     try {
       final data = await _api.get<Map<String, dynamic>>(
         ApiPaths.conversation(id),
@@ -178,7 +289,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
         keptPaths[m.id] = m.localPath!;
         if (m.role == 'user') lastUserPath = m.localPath;
       }
-      final msgs = _asList(data, keys: ['messages', 'items'])
+      final msgsRaw = _asList(data, keys: ['messages', 'items'])
           .whereType<Map>()
           .map((e) {
             var msg = ChatMessage.fromJson(Map<String, dynamic>.from(e));
@@ -187,6 +298,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
             return msg;
           })
           .toList();
+      var msgs = _preserveLayoutKeys(state.messages, msgsRaw);
       if (lastUserPath != null) {
         for (var i = msgs.length - 1; i >= 0; i--) {
           if (msgs[i].role == 'user' &&
@@ -206,12 +318,13 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
         messages: msgs,
         modelId: data['model_id']?.toString() ?? state.modelId,
         hasOlder: data['has_older'] == true,
+        loading: false,
         usedTokens: (vol['used_tokens'] as num?)?.toInt() ?? 0,
         capTokens: (vol['cap_tokens'] as num?)?.toInt() ?? kChatContextCapTokens,
         clearError: true,
       );
     } on ApiException catch (e) {
-      state = state.copyWith(error: e.message);
+      state = state.copyWith(error: e.message, loading: false);
     }
   }
 
@@ -295,6 +408,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
 
   Future<void> attachFile(String filePath, {String? filename}) async {
     state = state.copyWith(uploading: true, clearError: true);
+    _setLive(LivePhase.uploading);
     try {
       final data = await _api.uploadFile(filePath, filename: filename);
       final id = '${data['id'] ?? ''}';
@@ -309,8 +423,13 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
           localPath: filePath,
         ),
       );
+      _setLive(LivePhase.attached);
+      _liveTimer = Timer(const Duration(milliseconds: 1400), () {
+        if (state.livePhase == LivePhase.attached) _setLive(LivePhase.idle);
+      });
     } on ApiException catch (e) {
       state = state.copyWith(uploading: false, error: e.message);
+      _finishLiveErr(e.message);
     }
   }
 
@@ -362,6 +481,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
         msgs[msgs.length - 1] = msgs.last.copyWith(streaming: false);
       }
       state = state.copyWith(streaming: false, messages: msgs);
+      _setLive(LivePhase.idle);
     }
   }
 
@@ -425,6 +545,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
       clearError: true,
       clearPending: true,
     );
+    _beginStreamLive(hasAttachment: attachmentIds.isNotEmpty);
 
     _cancel = CancelToken();
     var buffer = '';
@@ -439,6 +560,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
         },
         cancelToken: _cancel,
       )) {
+        _onStreamEvent(event);
         if (event.event == 'token') {
           buffer += '${event.data['text'] ?? ''}';
           _patchAssistant(assistantId, buffer, streaming: true);
@@ -446,6 +568,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
           final err = '${event.data['error_message_fa'] ?? event.data['message_fa'] ?? event.data['detail'] ?? 'خطا در تولید پاسخ'}';
           _patchAssistant(assistantId, buffer, streaming: false, error: err);
           state = state.copyWith(streaming: false, error: err);
+          _finishLiveErr(err);
           return;
         }
       }
@@ -457,10 +580,11 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
       _finishCancelled(assistantId, buffer);
     } on ApiException catch (e) {
       final msg = buffer.trim().isEmpty
-          ? e.message
+          ? (e.message.contains('قطع') ? e.message : 'اتصال قطع شد')
           : '${e.message}\nاتصال قطع شد — متن ناقص را می‌بینید.';
       _patchAssistant(assistantId, buffer, streaming: false, error: msg);
       state = state.copyWith(streaming: false, error: msg);
+      _finishLiveErr(msg);
     }
   }
 
@@ -481,6 +605,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
       modelId: state.modelId,
     ));
     state = state.copyWith(messages: msgs, streaming: true, clearError: true);
+    _beginStreamLive(hasAttachment: false);
     _cancel = CancelToken();
     var buffer = '';
     try {
@@ -492,6 +617,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
         },
         cancelToken: _cancel,
       )) {
+        _onStreamEvent(event);
         if (event.event == 'token') {
           buffer += '${event.data['text'] ?? ''}';
           _patchAssistant(assistantId, buffer, streaming: true);
@@ -499,6 +625,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
           final err = '${event.data['error_message_fa'] ?? 'خطا'}';
           _patchAssistant(assistantId, buffer, streaming: false, error: err);
           state = state.copyWith(streaming: false);
+          _finishLiveErr(err);
           return;
         }
       }
@@ -509,6 +636,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
     } on ApiException catch (e) {
       _patchAssistant(assistantId, buffer, streaming: false, error: e.message);
       state = state.copyWith(streaming: false, error: e.message);
+      _finishLiveErr(e.message);
     }
   }
 
@@ -538,6 +666,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
       streaming: true,
       clearError: true,
     );
+    _beginStreamLive(hasAttachment: false);
 
     _cancel = CancelToken();
     var buffer = '';
@@ -551,6 +680,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
         },
         cancelToken: _cancel,
       )) {
+        _onStreamEvent(event);
         if (event.event == 'token') {
           buffer += '${event.data['text'] ?? ''}';
           _patchAssistant(assistantId, buffer, streaming: true);
@@ -559,6 +689,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
               '${event.data['error_message_fa'] ?? event.data['message_fa'] ?? event.data['detail'] ?? 'خطا در ویرایش'}';
           _patchAssistant(assistantId, buffer, streaming: false, error: err);
           state = state.copyWith(streaming: false, error: err);
+          _finishLiveErr(err);
           return;
         }
       }
@@ -571,6 +702,7 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
     } on ApiException catch (e) {
       _patchAssistant(assistantId, buffer, streaming: false, error: e.message);
       state = state.copyWith(streaming: false, error: e.message);
+      _finishLiveErr(e.message);
     }
   }
 
@@ -580,8 +712,10 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
   void _finishCancelled(String id, String buffer) {
     if (buffer.trim().isEmpty) {
       _patchAssistant(id, '', streaming: false, error: 'تولید متوقف شد');
+      _setLive(LivePhase.idle);
     } else {
       _patchAssistant(id, buffer, streaming: false);
+      _finishLiveOk();
     }
     state = state.copyWith(streaming: false);
   }
@@ -591,10 +725,12 @@ class ChatSessionController extends StateNotifier<ChatSessionState> {
     if (text.isEmpty) {
       _patchAssistant(id, '', streaming: false, error: _emptyReplyFa);
       state = state.copyWith(streaming: false, error: _emptyReplyFa);
+      _finishLiveErr(_emptyReplyFa);
       return;
     }
     _patchAssistant(id, buffer, streaming: false);
     state = state.copyWith(streaming: false);
+    _finishLiveOk();
   }
 
   void _patchAssistant(

@@ -9,10 +9,13 @@ import 'package:go_router/go_router.dart';
 import '../../core/api_client.dart';
 import '../../core/api_paths.dart';
 import '../../core/brand.dart';
+import '../../core/jalali.dart';
+import '../../core/live_status.dart';
 import '../../core/models.dart';
 import '../../core/providers.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/app_chrome.dart';
+import '../../shared/widgets/live_status_line.dart';
 import '../../shared/widgets/shimmer.dart';
 import '../../shared/widgets/ui.dart';
 
@@ -211,7 +214,12 @@ class QuickStartHubScreen extends ConsumerWidget {
           ),
         ),
         data: (list) {
-          final shown = list.take(6).toList();
+          final shown = list;
+          final byCat = <String, List<QuickStartCard>>{};
+          for (final c in shown) {
+            byCat.putIfAbsent(c.category, () => []).add(c);
+          }
+          final cats = byCat.keys.toList()..sort();
           return RefreshIndicator(
             onRefresh: () async {
               ref.invalidate(quickStartCardsProvider);
@@ -220,9 +228,9 @@ class QuickStartHubScreen extends ConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
               children: [
-                const SectionHeader(
+                SectionHeader(
                   title: 'ویزاردهای آماده',
-                  subtitle: 'شش مسیر سریع برای تولید متن یا تصویر',
+                  subtitle: '${shown.length} مسیر سریع برای تولید متن یا تصویر',
                 ),
                 const SizedBox(height: 8),
                 if (shown.isEmpty)
@@ -231,7 +239,15 @@ class QuickStartHubScreen extends ConsumerWidget {
                     body: 'کارت‌های شروع سریع از سرور نیامد.',
                   )
                 else
-                  ...shown.asMap().entries.map((e) {
+                  for (final cat in cats) ...[
+                    if (cats.length > 1) ...[
+                      const SizedBox(height: 10),
+                      Text(cat,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w800, fontSize: 13)),
+                      const SizedBox(height: 6),
+                    ],
+                    ...byCat[cat]!.asMap().entries.map((e) {
                     final c = e.value;
                     return SoftCard(
                       dense: true,
@@ -282,7 +298,8 @@ class QuickStartHubScreen extends ConsumerWidget {
                         .animate(delay: (40 * e.key).ms)
                         .fadeIn(duration: 300.ms)
                         .slideY(begin: 0.06, end: 0);
-                  }),
+                    }),
+                  ],
                 const SizedBox(height: 18),
                 const SectionHeader(title: 'تاریخچه'),
                 const SizedBox(height: 8),
@@ -302,8 +319,8 @@ class QuickStartHubScreen extends ConsumerWidget {
                         return ListTile(
                           contentPadding: EdgeInsets.zero,
                           title: Text('${m['title'] ?? m['card_id'] ?? 'اجرا'}'),
-                          subtitle:
-                              Text('${m['created_at'] ?? m['status'] ?? ''}'),
+                          subtitle: Text(JalaliFmt.format(
+                              m['created_at'] ?? m['status'] ?? '')),
                         );
                       }).toList(),
                     );
@@ -339,6 +356,8 @@ class _QuickStartWizardScreenState
   String? _jobId;
   List<Map<String, dynamic>> _followUps = const [];
   Timer? _poll;
+  Timer? _liveHold;
+  LiveStatus _live = const LiveStatus();
 
   @override
   void initState() {
@@ -349,10 +368,23 @@ class _QuickStartWizardScreenState
   @override
   void dispose() {
     _poll?.cancel();
+    _liveHold?.cancel();
     for (final c in _values.values) {
       c.dispose();
     }
     super.dispose();
+  }
+
+  void _setLive(LiveStatus next) {
+    _liveHold?.cancel();
+    setState(() => _live = next);
+  }
+
+  void _finishLiveOk() {
+    _setLive(const LiveStatus(phase: LivePhase.ready));
+    _liveHold = Timer(const Duration(milliseconds: 1600), () {
+      if (mounted) _setLive(const LiveStatus());
+    });
   }
 
   Future<void> _load() async {
@@ -393,6 +425,9 @@ class _QuickStartWizardScreenState
     setState(() {
       _busy = true;
       _error = null;
+      _live = LiveStatus(
+        phase: card.kind == 'image' ? LivePhase.queued : LivePhase.generating,
+      );
       if (followUp == null) {
         _result = null;
         _imageUrl = null;
@@ -463,8 +498,12 @@ class _QuickStartWizardScreenState
         setState(() => _result = data.toString());
       }
       ref.invalidate(quickStartHistoryProvider);
+      if (jobId == null) {
+        if (_error == null) _finishLiveOk();
+      }
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+      _setLive(LiveStatus(phase: LivePhase.error, errorFa: e.message));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -483,6 +522,17 @@ class _QuickStartWizardScreenState
             ? Map<String, dynamic>.from(data['job'] as Map)
             : data;
         final status = '${job['status'] ?? data['status'] ?? ''}';
+        final pct = realPercentOf(job['progress'] ?? job['percent'] ?? data['progress']);
+        final phase = livePhaseFromJobStatus(status);
+        if (phase != null && mounted) {
+          _setLive(LiveStatus(
+            phase: phase,
+            percent: pct,
+            errorFa: phase == LivePhase.error
+                ? '${job['error_message_fa'] ?? data['error_message_fa'] ?? 'ناموفق'}'
+                : null,
+          ));
+        }
         final text =
             '${job['text'] ?? job['output'] ?? job['result'] ?? data['text'] ?? data['output'] ?? ''}';
         final img = job['image_url'] ??
@@ -499,17 +549,21 @@ class _QuickStartWizardScreenState
                   : '${PigptBrand.apiBase}$img';
               if (text.isNotEmpty) _result = text;
             });
+            _finishLiveOk();
           }
-        } else if (status == 'completed' || text.isNotEmpty) {
+        } else if (status == 'completed' || status == 'succeeded' || text.isNotEmpty) {
           _poll?.cancel();
           if (mounted) {
             setState(() => _result = text.isNotEmpty ? text : 'انجام شد');
+            _finishLiveOk();
           }
         } else if (status == 'failed') {
           _poll?.cancel();
           if (mounted) {
-            setState(() =>
-                _error = '${job['error_message_fa'] ?? data['error_message_fa'] ?? 'ناموفق'}');
+            final err =
+                '${job['error_message_fa'] ?? data['error_message_fa'] ?? 'ناموفق'}';
+            setState(() => _error = err);
+            _setLive(LiveStatus(phase: LivePhase.error, errorFa: err));
           }
         }
       } catch (_) {}
@@ -611,19 +665,12 @@ class _QuickStartWizardScreenState
                 const SizedBox(height: 18),
                 FilledButton(
                   onPressed: _busy ? null : () => _run(),
-                  child: _busy
-                      ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('اجرا'),
+                  child: const Text('اجرا'),
                 ),
+                LiveStatusLine(status: _live),
                 if (_jobId != null && _result == null && _imageUrl == null) ...[
-                  const SizedBox(height: 12),
-                  const LinearProgressIndicator(),
                   const SizedBox(height: 8),
-                  const Text('در حال آماده‌سازی خروجی…'),
+                  const LinearProgressIndicator(minHeight: 2),
                 ],
                 if (_error != null) ...[
                   const SizedBox(height: 12),
