@@ -1,0 +1,10 @@
+.desktop-venv/
+.build-venv/
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.whl
+*.tar
+*.tar.gz
+_ship_stage/
